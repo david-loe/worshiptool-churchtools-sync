@@ -1,16 +1,26 @@
 ct_events:
   - name: Gottesdienst
     song_placements:
-      - after:
+      - agenda_item:
           title: Lobpreis
           type: header
-        songs: "[:-1]"
-      - after:
+        position: after
+        songs: "[:-1]" # Alle bis auf den letzten
+      - agenda_item:
           title: Abschluss
           type: header
-        songs: "[-1]"
+        position: after
+        songs: "[-1]" # Nur der letzte
+  - name: Fokus
+    song_placements:
+      - agenda_item:
+          type: song
+        position: at
+        songs: "[:]" # Alle Songs
+
 ct_item_defaults:
   responsible: "[Lobpreisleitung]"
   duration: 300
+
 ct_song_defaults:
   songcategory_id: 4

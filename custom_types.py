@@ -1,8 +1,9 @@
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 
 class Config_Song_Placement(TypedDict):
-    after: dict[str, str | int]
+    agenda_item: dict[str, str | int]
+    position: Literal["at", "after", "before"]
     songs: str
 
 

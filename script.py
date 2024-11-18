@@ -4,7 +4,7 @@ import os
 import sys
 import yaml
 from dotenv import load_dotenv
-from manager import CT_Event_Manager, CT_Song_Manager
+from manager import AgendaException, CT_Event_Manager, CT_Song_Manager
 from custom_types import Config
 from matcher import Event_Matcher, Song_Matcher
 from worshiptools_api import Worshiptools_API
@@ -64,7 +64,7 @@ def main():
                     event_manager = CT_Event_Manager(ct_api, config, event["ct"]["id"])
                     songs = song_manager.convert(event["wt"]["songs"])
                     event_manager.place_songs(songs, ct_event_config["song_placements"])
-                except Exception as e:
+                except AgendaException as e:
                     logging.warning(
                         f"Unable to sync to: {event['ct']['name']} - {event['ct']['startDate']}\nError: {e}"
                     )

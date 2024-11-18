@@ -4,14 +4,20 @@ from matcher import Song_Matcher
 from utils import slice_list
 
 
+class AgendaException(Exception):
+    pass
+
+
 class CT_Event_Manager:
     def __init__(self, ct_api: Churchtools_API, config: Config, ct_event_id: int):
         self.ct_api = ct_api
         self.config = config
-        self.ct_agenda = self.ct_api.get(f"events/{ct_event_id}/agenda")["data"]
-        if not self.ct_agenda:
-            raise Exception(f"No Agenda found for event {ct_event_id}!")
         self.ct_event_id = ct_event_id
+        res = self.ct_api.get(f"events/{self.ct_event_id}/agenda")
+        if res:
+            self.ct_agenda = res["data"]
+        else:
+            raise AgendaException(f"No Agenda found for event {self.ct_event_id}!")
 
     def place_songs(self, songs: list[CT_Song], song_placements: list[Config_Song_Placement]):
         sort_placements = []
@@ -44,23 +50,32 @@ class CT_Event_Manager:
             "event_ids": [self.ct_event_id],
         }
         item.update(self.config["ct_item_defaults"])
-        new_item = self.ct_agenda["items"][position - position_correction]["type"] != "song"
+        new_item = (
+            len(self.ct_agenda["items"]) <= position - position_correction
+            or self.ct_agenda["items"][position - position_correction]["type"] != "song"
+        )
+        skip = False
         if new_item:
             self.shuffle_agenda_items(position)
         else:
             item["id"] = self.ct_agenda["items"][position - position_correction]["id"]
+            skip = self.ct_agenda["items"][position - position_correction]["song"]["songId"] == ct_song["id"]
 
-        self.ct_api.save_item_ajax(item)
+        if not skip:
+            self.ct_api.save_item_ajax(item)
         return new_item
 
     def shuffle_agenda_items(self, new_item_position: int):
         items = self.ct_api.load_agenda_items_ajax(self.ct_agenda["id"])["data"]
         agenda = self.ct_api.load_agenda_ajax(self.ct_agenda["id"])["data"][str(self.ct_agenda["id"])]
+        changed = False
         for id, item in items.items():
             if int(item["sortkey"]) >= new_item_position:
+                changed = True
                 item["sortkey"] = int(item["sortkey"]) + 1
-        agenda["items"] = items
-        return self.ct_api.save_agenda_ajax(agenda)
+        if changed:
+            agenda["items"] = items
+            self.ct_api.save_agenda_ajax(agenda)
 
     def find_song_placement(self, song_placement: Config_Song_Placement) -> int | None:
         """
@@ -68,12 +83,17 @@ class CT_Event_Manager:
         """
         for item in self.ct_agenda["items"]:
             match = True
-            for key, value in song_placement["after"].items():
+            for key, value in song_placement["agenda_item"].items():
                 if item[key] != value:
                     match = False
                     break
             if match:
-                return item["position"] + 1
+                if song_placement["position"] == "after":
+                    return item["position"] + 1
+                elif song_placement["position"] == "at":
+                    return item["position"]
+                elif song_placement["position"] == "before":
+                    return item["position"] - 1
         return None
 
 
