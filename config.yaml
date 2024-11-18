@@ -1,0 +1,16 @@
+ct_events:
+  - name: Gottesdienst
+    song_placements:
+      - after:
+          title: Lobpreis
+          type: header
+        songs: "[:-1]"
+      - after:
+          title: Abschluss
+          type: header
+        songs: "[-1]"
+ct_item_defaults:
+  responsible: "[Lobpreisleitung]"
+  duration: 300
+ct_song_defaults:
+  songcategory_id: 4

@@ -1,2 +1,10 @@
 # worshiptool-churchtools-sync
-Sync vom Worshiptools to Churchtooös
+
+Sync von Worshiptools zu Churchtools  
+Fügt Songs von Worshiptools Charts in Churchtools Event Agenda hinzu.
+
+## Run
+
+1. `cp .env.example .env` ENV ausfüllen
+2. `config.yaml` konfigurieren
+3. `script.py` ausführen
