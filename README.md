@@ -7,4 +7,4 @@ Fügt Songs von Worshiptools Charts in Churchtools Event Agenda hinzu.
 
 1. `cp .env.example .env` ENV ausfüllen
 2. `config.yaml` konfigurieren
-3. `script.py` ausführen
+3. `sync.py` ausführen

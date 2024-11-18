@@ -1,0 +1,8 @@
+services:
+  sync:
+    build: .
+    volumes:
+      - ./config.yaml:/config.yaml:ro
+    command: --config /config.yaml
+    env_file:
+      - .env
