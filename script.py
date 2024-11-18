@@ -65,9 +65,7 @@ def main():
                     songs = song_manager.convert(event["wt"]["songs"])
                     event_manager.place_songs(songs, ct_event_config["song_placements"])
                 except AgendaException as e:
-                    logging.warning(
-                        f"Unable to sync to: {event['ct']['name']} - {event['ct']['startDate']}\nError: {e}"
-                    )
+                    logging.warning(f"Unable to sync to: {event['ct']['name']} - {event['ct']['startDate']}: {e}")
 
 
 if __name__ == "__main__":
