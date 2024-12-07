@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import TypedDict, Union
 from zoneinfo import ZoneInfo
 from custom_types import CT_Event, CT_Song, WT_Event, WT_Song
+from utils import parse_datetime
 
 
 class CT_Type(TypedDict):
@@ -13,6 +14,8 @@ class WT_Type(TypedDict):
 
 
 class Event_Matcher:
+    wt_time_formats = ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"]
+
     def __init__(self, wt_tz, ct_tz):
         self.ct_tzinfo = ZoneInfo(ct_tz)
         self.wt_tzinfo = ZoneInfo(wt_tz)
@@ -26,7 +29,7 @@ class Event_Matcher:
             for wt_event in wt_events:
                 for wt_event_time in wt_event["times"]:
                     wt_event_start = (
-                        datetime.strptime(wt_event_time, "%Y-%m-%dT%H:%M:%S")
+                        parse_datetime(wt_event_time, self.wt_time_formats)
                         .replace(tzinfo=self.wt_tzinfo)
                         .astimezone(self.ct_tzinfo)
                     )

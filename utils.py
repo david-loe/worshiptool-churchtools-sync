@@ -1,4 +1,5 @@
-from typing import List, TypeVar, Union
+from typing import TypeVar
+from datetime import datetime
 
 T = TypeVar("T")
 
@@ -30,3 +31,19 @@ def slice_list(input_list: list[T], slice_str: str):
 
     except (ValueError, IndexError) as e:
         raise ValueError(f"Ungültiger Slice-String: {slice_str}. Fehler: {e}")
+
+
+def parse_datetime(datetime_str: str, formats: list[str]) -> datetime:
+    """
+    Parse a datetime string with varying formats.
+
+    :param datetime_str: The datetime string to parse.
+    :param formats: A list of possible datetime formats.
+    :return: A datetime object if parsing is successful, None otherwise.
+    """
+    for fmt in formats:
+        try:
+            return datetime.strptime(datetime_str, fmt)
+        except ValueError:
+            continue
+    raise ValueError(f"Time data '{datetime_str}' does not match any format in {formats}")

@@ -42,9 +42,6 @@ def main():
         os.environ.get("WORSHIPTOOLS_ACCOUNT_ID"),
     )
     ct_songs = ct_api.get_all("songs", {"limit": 100})["data"]
-    for song in ct_songs:
-        if song["ccli"] == "":
-            print(f"{song['id']} - {song['name']}")
     wt_songs = wt_api.get_all("song", {"rows": 100})["docs"]
     song_matcher = Song_Matcher(wt_songs, ct_songs)
     song_manager = CT_Song_Manager(ct_api, config, song_matcher)
