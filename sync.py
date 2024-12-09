@@ -2,16 +2,19 @@ import argparse
 import logging
 import os
 import sys
+import traceback
 import yaml
 from dotenv import load_dotenv
 from manager import AgendaException, CT_Event_Manager, CT_Song_Manager
 from custom_types import Config
 from matcher import Event_Matcher, Song_Matcher
+from telegram import send_telegram_message
 from worshiptools_api import Worshiptools_API
 from churchtools_api import Churchtools_API
 
 
 def main():
+    load_dotenv()
     parser = argparse.ArgumentParser(description="Worshiptools ↔️ Churchtools Sync")
     parser.add_argument("--loglevel", default="INFO", help="Setzt das Loglevel (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
     parser.add_argument("--config", default="config.yaml", help="Pfad zur Konfigurationsdatei")
@@ -24,7 +27,6 @@ def main():
         sys.exit(1)
 
     logging.basicConfig(level=log_level)
-    load_dotenv()
 
     # YAML-Konfigurationsdatei laden
     try:
@@ -66,4 +68,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        # Hier landen nur Fehler, die nicht bereits im main()-Code abgefangen wurden
+        error_message = f"Unbehandelter Fehler in Skript:\n\n{traceback.format_exc()}"
+        logging.critical(error_message, exc_info=True)
+        send_telegram_message(error_message)
+        sys.exit(1)
