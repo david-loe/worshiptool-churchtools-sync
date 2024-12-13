@@ -1,27 +1,30 @@
 from datetime import datetime
+import re
 from typing import TypedDict, Union
 from zoneinfo import ZoneInfo
-from custom_types import CT_Event, CT_Song, WT_Event, WT_Song
+from custom_types import CT_Event, CT_Song, Config, Config_CT_Event, WT_Event, WT_Song
 from utils import parse_datetime
 
 
-class CT_Type(TypedDict):
+class Event_Match(TypedDict):
     ct: CT_Event
-
-
-class WT_Type(TypedDict):
     wt: WT_Event
+
+
+class Event_Config_Match(Event_Match):
+    config: Config_CT_Event
 
 
 class Event_Matcher:
     wt_time_formats = ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"]
 
-    def __init__(self, wt_tz, ct_tz):
+    def __init__(self, wt_tz, ct_tz, config: Config):
         self.ct_tzinfo = ZoneInfo(ct_tz)
         self.wt_tzinfo = ZoneInfo(wt_tz)
+        self.config = config
 
-    def match(self, wt_events: list[WT_Event], ct_events: list[CT_Event]):
-        matches: list[Union[CT_Type, WT_Type]] = []
+    def match_by_time(self, wt_events: list[WT_Event], ct_events: list[CT_Event]):
+        matches: list[Event_Match] = []
         for ct_event in ct_events:
             ct_event_start = datetime.strptime(ct_event["startDate"], "%Y-%m-%dT%H:%M:%SZ").replace(
                 tzinfo=self.ct_tzinfo
@@ -35,6 +38,26 @@ class Event_Matcher:
                     )
                     if wt_event_start == ct_event_start:
                         matches.append({"ct": ct_event, "wt": wt_event})
+        return matches
+
+    def match(self, wt_events: list[WT_Event], ct_events: list[CT_Event]):
+        matches: list[Union[Event_Config_Match]] = []
+        events = self.match_by_time(wt_events, ct_events)
+        for event in events:
+            if event["wt"]["songs"]:
+                ct_event_config = None
+                for ct_event in self.config["ct_events"]:
+                    if "regex" in ct_event and ct_event["regex"]:
+                        regex = re.compile(ct_event["regex"])
+                        if regex.search(event["ct"]["name"]):
+                            ct_event_config = ct_event
+                            break
+                    else:
+                        if ct_event["name"] in event["ct"]["name"]:
+                            ct_event_config = ct_event
+                            break
+                if ct_event_config:
+                    matches.append({"ct": event["ct"], "wt": event["wt"], "config": ct_event_config})
         return matches
 
 

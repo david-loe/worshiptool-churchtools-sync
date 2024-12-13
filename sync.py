@@ -1,7 +1,6 @@
 import argparse
 import logging
 import os
-import re
 import sys
 import traceback
 import yaml
@@ -37,7 +36,7 @@ def main():
         logging.error(f"Fehler beim Laden der Konfigurationsdatei {args.config}: {e}")
         sys.exit(1)
 
-    event_matcher = Event_Matcher(os.environ.get("WORSHIPTOOLS_TZ"), os.environ.get("CHURCHTOOLS_TZ"))
+    event_matcher = Event_Matcher(os.environ.get("WORSHIPTOOLS_TZ"), os.environ.get("CHURCHTOOLS_TZ"), config)
     ct_api = Churchtools_API(os.environ.get("CHURCHTOOLS_BASE_URL"), os.environ.get("CHURCHTOOLS_LOGIN_TOKEN"))
     wt_api = Worshiptools_API(
         os.environ.get("WORSHIPTOOLS_EMAIL"),
@@ -53,26 +52,15 @@ def main():
     ct_events = ct_api.get("events")["data"]
     events = event_matcher.match(wt_services, ct_events)
     for event in events:
-        if event["wt"]["songs"]:
-            ct_event_config = None
-            for ct_event in config["ct_events"]:
-                if ct_event["regex"]:
-                    regex = re.compile(ct_event["regex"])
-                    if regex.search(event["ct"]["name"]):
-                        ct_event_config = ct_event
-                        break
-                else:
-                    if ct_event["name"] in event["ct"]["name"]:
-                        ct_event_config = ct_event
-                        break
-            if ct_event_config:
-                logging.info(f"Syncing to: {event['ct']['name']} - {event['ct']['startDate']}")
-                try:
-                    event_manager = CT_Event_Manager(ct_api, config, event["ct"]["id"])
-                    songs = song_manager.convert(event["wt"]["songs"])
-                    event_manager.place_songs(songs, ct_event_config["song_placements"])
-                except AgendaException as e:
-                    logging.warning(f"Unable to sync to: {event['ct']['name']} - {event['ct']['startDate']}: {e}")
+        logging.info(
+            f"Syncing to: {event['ct']['name']} ({event['ct']['startDate']}) - using config: {event['config']['name']}"
+        )
+        try:
+            event_manager = CT_Event_Manager(ct_api, config, event["ct"]["id"])
+            songs = song_manager.convert(event["wt"]["songs"])
+            event_manager.place_songs(songs, event["config"]["song_placements"])
+        except AgendaException as e:
+            logging.warning(f"Unable to sync to: {event['ct']['name']} - {event['ct']['startDate']}: {e}")
 
 
 if __name__ == "__main__":
