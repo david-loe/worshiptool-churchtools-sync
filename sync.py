@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+import re
 import sys
 import traceback
 import yaml
@@ -55,8 +56,15 @@ def main():
         if event["wt"]["songs"]:
             ct_event_config = None
             for ct_event in config["ct_events"]:
-                if ct_event["name"] in event["ct"]["name"]:
-                    ct_event_config = ct_event
+                if ct_event["regex"]:
+                    regex = re.compile(ct_event["regex"])
+                    if regex.search(event["ct"]["name"]):
+                        ct_event_config = ct_event
+                        break
+                else:
+                    if ct_event["name"] in event["ct"]["name"]:
+                        ct_event_config = ct_event
+                        break
             if ct_event_config:
                 logging.info(f"Syncing to: {event['ct']['name']} - {event['ct']['startDate']}")
                 try:

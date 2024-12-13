@@ -1,4 +1,4 @@
-from typing import Literal, TypedDict
+from typing import Literal, Optional, TypedDict
 
 
 class Config_Song_Placement(TypedDict):
@@ -9,6 +9,7 @@ class Config_Song_Placement(TypedDict):
 
 class Config_CT_Event(TypedDict):
     name: str
+    regex: Optional[str]
     song_placements: list[Config_Song_Placement]
 
 

@@ -1,5 +1,6 @@
 ct_events:
   - name: Gottesdienst
+    regex: (?<!Heilig Abend )Gottesdienst
     song_placements:
       - agenda_item:
           title: Lobpreis

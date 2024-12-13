@@ -108,11 +108,14 @@ class CT_Song_Manager:
         for wt_song_id in wt_song_ids:
             ct_song = self.song_matcher.match(wt_song_id)
             if not ct_song:
-                ct_song = self.create_ct_song(self.song_matcher.find_wt_song({"id": wt_song_id}))
-            ct_songs.append(ct_song)
+                wt_song = self.song_matcher.find_wt_song({"id": wt_song_id})
+                if wt_song:
+                    ct_song = self.create_ct_song(wt_song)
+            if ct_song:
+                ct_songs.append(ct_song)
         return ct_songs
 
-    def create_ct_song(self, wt_song: WT_Song) -> CT_Song:
+    def create_ct_song(self, wt_song: WT_Song | None) -> CT_Song:
         new_song_id = self.ct_api.create_song(
             title=wt_song["name"],
             songcategory_id=self.config["ct_song_defaults"]["songcategory_id"],
