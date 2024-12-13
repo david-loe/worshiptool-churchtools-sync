@@ -5,6 +5,7 @@ import sys
 import traceback
 import yaml
 from dotenv import load_dotenv
+from cache import Cacher, YamlDatabase
 from manager import AgendaException, CT_Event_Manager, CT_Song_Manager
 from custom_types import Config
 from matcher import Event_Matcher, Song_Matcher
@@ -18,6 +19,7 @@ def main():
     parser = argparse.ArgumentParser(description="Worshiptools ↔️ Churchtools Sync")
     parser.add_argument("--loglevel", default="INFO", help="Setzt das Loglevel (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
     parser.add_argument("--config", default="config.yaml", help="Pfad zur Konfigurationsdatei")
+    parser.add_argument("--db", default="db.yaml", help="Pfad zur Yaml DB Datei")
     args = parser.parse_args()
 
     # Loglevel einstellen
@@ -36,6 +38,7 @@ def main():
         logging.error(f"Fehler beim Laden der Konfigurationsdatei {args.config}: {e}")
         sys.exit(1)
 
+    cacher = Cacher(YamlDatabase(args.db))
     event_matcher = Event_Matcher(os.environ.get("WORSHIPTOOLS_TZ"), os.environ.get("CHURCHTOOLS_TZ"), config)
     ct_api = Churchtools_API(os.environ.get("CHURCHTOOLS_BASE_URL"), os.environ.get("CHURCHTOOLS_LOGIN_TOKEN"))
     wt_api = Worshiptools_API(
@@ -52,6 +55,8 @@ def main():
     ct_events = ct_api.get("events")["data"]
     events = event_matcher.match(wt_services, ct_events)
     for event in events:
+        if cacher.is_already_synced(event):
+            continue
         logging.info(
             f"Syncing to: {event['ct']['name']} ({event['ct']['startDate']}) - using config: {event['config']['name']}"
         )
@@ -59,6 +64,7 @@ def main():
             event_manager = CT_Event_Manager(ct_api, config, event["ct"]["id"])
             songs = song_manager.convert(event["wt"]["songs"])
             event_manager.place_songs(songs, event["config"]["song_placements"])
+            cacher.cache_sync(event)
         except AgendaException as e:
             logging.warning(f"Unable to sync to: {event['ct']['name']} - {event['ct']['startDate']}: {e}")
 

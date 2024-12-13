@@ -30,6 +30,8 @@ class WT_Event(TypedDict):
     id: str
     songs: list[str]
     name: str | None
+    type: str
+    mod: str
 
 
 class WT_Song(TypedDict):

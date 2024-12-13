@@ -9,6 +9,7 @@ from utils import parse_datetime
 class Event_Match(TypedDict):
     ct: CT_Event
     wt: WT_Event
+    time: datetime
 
 
 class Event_Config_Match(Event_Match):
@@ -37,7 +38,7 @@ class Event_Matcher:
                         .astimezone(self.ct_tzinfo)
                     )
                     if wt_event_start == ct_event_start:
-                        matches.append({"ct": ct_event, "wt": wt_event})
+                        matches.append({"ct": ct_event, "wt": wt_event, "time": ct_event_start})
         return matches
 
     def match(self, wt_events: list[WT_Event], ct_events: list[CT_Event]):
@@ -57,7 +58,8 @@ class Event_Matcher:
                             ct_event_config = ct_event
                             break
                 if ct_event_config:
-                    matches.append({"ct": event["ct"], "wt": event["wt"], "config": ct_event_config})
+                    event["config"] = ct_event_config
+                    matches.append(event)
         return matches
 
 

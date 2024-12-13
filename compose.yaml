@@ -3,6 +3,7 @@ services:
     build: .
     volumes:
       - ./config.yaml:/config.yaml:ro
-    command: --config /config.yaml
+      - ./db.yaml:/db.yaml
+    command: --config /config.yaml --db /db.yaml
     env_file:
       - .env
