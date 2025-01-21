@@ -6,6 +6,8 @@ from typing import Dict, Optional
 import requests
 import urllib.parse
 
+from custom_types import CT_Song
+
 
 class Churchtools_API:
     def __init__(
@@ -174,54 +176,21 @@ class Churchtools_API:
         logging.error(f"Fehler bei der API-Anfrage: {response.status_code}, {response.text}")
         return None
 
-    def create_song(
-        self,
-        title: str,
-        songcategory_id: int,
-        author="",
-        copyright="",
-        ccli="",
-        tonality="",
-        bpm=None,
-        beat=None,
-    ):
-        """Method to create a new song using legacy AJAX API
-        Does not check for existing duplicates !
-        function endpoint see https://api.church.tools/function-churchservice_addNewSong.html
-        name for params reverse engineered based on web developer tools in Firefox and live churchTools instance.
-
-        :param title: Title of the Song
-        :param songcategory_id: int id of site specific songcategories (created in CT Metadata) - required
-        :param author: name of author or authors, ideally comma separated if multiple - optional
-        :param copyright: name of organization responsible for rights distribution - optional
-        :param ccli: CCLI ID see songselect.ccli.com/ - using "-" if empty on purpose - optional
-        :param tonality: empty or specific string used for tonaly - see ChurchTools for details e.g. Ab,A,C,C# ... - optional
-        :param bpm: Beats per Minute - optional
-        :param beat: Beat - optional
-
-        :return: int song_id: ChurchTools song_id of the Song created or None if not successful
-        :rtype: int | None
-        """
+    def create_song(self, name: str, categoryId: int, author=None, copyright=None, ccli=None):
+        """Method to create a new song and add arrangement"""
         url = self.base_url + "/?q=churchservice/ajax&func=addNewSong"
 
-        data = {
-            "bezeichnung": title,
-            "songcategory_id": songcategory_id,
-            "author": author,
-            "copyright": copyright,
-            "ccli": ccli,
-            "tonality": tonality,
-            "bpm": bpm,
-            "beat": beat,
-        }
-        logging.info(f"POST {url}\n{data}")
-        response = self.session.post(url=url, data=data)
+        data = {"name": name, "categoryId": categoryId, "author": author, "copyright": copyright, "ccli": ccli}
+        response = self.post("songs", data)
 
-        if response.status_code == 200:
-            response_content = json.loads(response.content)
-            new_id = int(response_content["data"])
-            logging.debug("Song created successful with ID=%s", new_id)
-            return new_id
+        if response:
+            new_song: CT_Song = response["data"]
+            logging.debug("Song created successful with ID=%s", new_song["id"])
+
+            a_response = self.post(f"songs/{new_song['id']}/arrangements", {"name": "Standard-Arrangement"})
+            if a_response:
+                new_song["arrangements"].append(a_response["data"])
+                return new_song
 
         logging.info("Creating song failed with %s", response.status_code)
         return None
@@ -294,9 +263,9 @@ class Churchtools_API:
         response = self.session.post(
             api_url,
             data=json_data,
-            headers={"Content-Type": "application/json", "Authorization": f"Login {self.login_token}"},
+            headers={"Content-Type": "application/json"},
         )
-        if response.status_code == 200:
+        if response.status_code == 200 or response.status_code == 201:
             return response.json()
         logging.error(f"Fehler bei der API-Anfrage: {response.status_code}, {response.text}")
         return None

@@ -116,13 +116,11 @@ class CT_Song_Manager:
         return ct_songs
 
     def create_ct_song(self, wt_song: WT_Song | None) -> CT_Song:
-        new_song_id = self.ct_api.create_song(
-            title=wt_song["name"],
-            songcategory_id=self.config["ct_song_defaults"]["songcategory_id"],
+        new_song = self.ct_api.create_song(
+            name=wt_song["name"],
+            categoryId=self.config["ct_song_defaults"]["songcategory_id"],
             author=wt_song["artist"],
             ccli=wt_song["ccli"],
-            tonality=wt_song["key"],
         )
-        new_song = self.ct_api.get(f"songs/{new_song_id}")["data"]
         self.song_matcher.add_ct_song(new_song)
         return new_song
