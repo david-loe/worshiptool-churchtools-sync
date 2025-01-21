@@ -182,8 +182,8 @@ class Churchtools_API:
         copyright="",
         ccli="",
         tonality="",
-        bpm="",
-        beat="",
+        bpm=None,
+        beat=None,
     ):
         """Method to create a new song using legacy AJAX API
         Does not check for existing duplicates !
