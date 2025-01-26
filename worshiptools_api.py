@@ -35,6 +35,7 @@ class Worshiptools_API:
         response = self.session.post(login_url, data=data, allow_redirects=True)
         if response.status_code not in [200, 302]:
             raise Exception(f"Fehler beim Login: {response.status_code}, {response.text}")
+        logging.info(f"Worshiptools Login Successful as {self.email}")
         self.bearer_token = self.session.cookies.get("weAuthToken")
 
     def get(self, endpoint: str, params: dict = {}):
@@ -63,6 +64,8 @@ class Worshiptools_API:
         while current_num < total_num:
             params.update({"start": current_num})
             res = self.get(endpoint, params)
+            if not res:
+                raise Exception("Fehler bei Anfrage an Worshiptools API")
             total_num = res["numFound"]
             data = data + res["docs"]
             current_num = len(data)
