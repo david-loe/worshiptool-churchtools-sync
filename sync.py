@@ -12,6 +12,9 @@ from matcher import Event_Matcher, Song_Matcher
 from telegram import send_telegram_message
 from worshiptools_api import Worshiptools_API
 from churchtools_api import Churchtools_API
+import io
+
+log_stream = io.StringIO()
 
 
 def main():
@@ -28,7 +31,13 @@ def main():
         print(f"Ungültiges Loglevel: {args.loglevel}")
         sys.exit(1)
 
-    logging.basicConfig(level=log_level)
+    logging.basicConfig(
+        level=log_level,
+        handlers=[
+            logging.StreamHandler(sys.stdout),  # Logs auf die Konsole
+            logging.StreamHandler(log_stream),  # Logs in StringIO
+        ],
+    )
 
     # YAML-Konfigurationsdatei laden
     try:
@@ -74,7 +83,8 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         # Hier landen nur Fehler, die nicht bereits im main()-Code abgefangen wurden
-        error_message = f"Unbehandelter Fehler in Skript:\n\n{traceback.format_exc()}"
-        logging.critical(error_message, exc_info=True)
-        send_telegram_message(error_message)
+        logging.critical("Unbehandelter Fehler in Skript", exc_info=True)
+        # Vollständigen Log extrahieren
+        full_log = log_stream.getvalue()
+        send_telegram_message(full_log)
         sys.exit(1)
