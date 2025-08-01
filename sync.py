@@ -61,7 +61,9 @@ def main():
     song_manager = CT_Song_Manager(ct_api, config, song_matcher)
 
     wt_services = wt_api.get("service")["docs"]
+    logging.info(f"Worship Tool Services: {len(wt_services)}")
     ct_events = ct_api.get("events")["data"]
+    logging.debug(f"Churchtools Events: {len(ct_events)}")
     events = event_matcher.match(wt_services, ct_events)
     for event in events:
         if cacher.is_already_synced(event):

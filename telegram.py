@@ -16,7 +16,7 @@ def send_telegram_message(message: str):
         "chat_id": chat_id,
         "text": message,
     }
-
+    logging.debug(f"Nachricht per Telegram gesendet: {message}")
     response = requests.post(url, data=payload)
     if response.status_code != 200:
         logging.error(f"Fehler beim Senden der Telegram-Nachricht: {response.text}")

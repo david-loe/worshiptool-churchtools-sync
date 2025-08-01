@@ -5,6 +5,7 @@ import logging
 from typing import Dict, Optional
 import requests
 import urllib.parse
+from telegram import send_telegram_message
 
 from custom_types import CT_Song
 
@@ -186,6 +187,11 @@ class Churchtools_API:
         if response:
             new_song: CT_Song = response["data"]
             logging.debug("Song created successful with ID=%s", new_song["id"])
+            send_telegram_message(
+                f"""*Neuer Song*
+{new_song['name']}, {new_song['author']}
+https://songselect.ccli.com/songs/{new_song['ccli']}"""
+            )
 
             a_response = self.post(f"songs/{new_song['id']}/arrangements", {"name": "Standard-Arrangement"})
             if a_response:
