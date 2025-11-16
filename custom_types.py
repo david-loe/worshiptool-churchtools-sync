@@ -10,6 +10,7 @@ class Config_Song_Placement(TypedDict):
 class Config_CT_Event(TypedDict):
     name: str
     regex: Optional[str]
+    campus_name: Optional[str]
     song_placements: list[Config_Song_Placement]
 
 
@@ -19,10 +20,19 @@ class Config(TypedDict):
     ct_song_defaults: dict[str, any]
 
 
+class CT_Calendar_Domain_Attributes(TypedDict):
+    campusName: str
+
+
+class CT_Calendar(TypedDict):
+    domainAttributes: CT_Calendar_Domain_Attributes
+
+
 class CT_Event(TypedDict):
     startDate: str
     id: int
     name: str
+    calendar: CT_Calendar
 
 
 class WT_Event(TypedDict):

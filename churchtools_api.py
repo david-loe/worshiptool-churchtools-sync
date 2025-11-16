@@ -29,8 +29,6 @@ class Churchtools_API:
         """
         self.session = None
         self.base_url = base_url
-        self.ajax_song_last_update = None
-        self.ajax_song_cache = []
 
         if ct_token is not None:
             self.login_ct_rest_api(ct_token=ct_token)
@@ -128,7 +126,7 @@ class Churchtools_API:
         logging.error(f"Fehler bei der API-Anfrage: {response.status_code}, {response.text}")
         return None
 
-    def add_item_event_relation(self, item_id: int, event_id: int):
+    def add_item_event_relation_ajax(self, item_id: int, event_id: int):
         api_url = f"{self.base_url}/index.php?q=churchservice/ajax"
         data = {"func": "addItemEventRelation", "item_id": item_id, "event_id": event_id}
         logging.info(f"POST {api_url}\n{data}")
@@ -179,7 +177,6 @@ class Churchtools_API:
 
     def create_song(self, name: str, categoryId: int, author=None, copyright=None, ccli=None):
         """Method to create a new song and add arrangement"""
-        url = self.base_url + "/?q=churchservice/ajax&func=addNewSong"
 
         data = {"name": name, "categoryId": categoryId, "author": author, "copyright": copyright, "ccli": ccli}
         response = self.post("songs", data)

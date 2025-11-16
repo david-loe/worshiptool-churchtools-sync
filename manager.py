@@ -77,7 +77,7 @@ class CT_Event_Manager:
             agenda["items"] = items
             self.ct_api.save_agenda_ajax(agenda)
 
-    def find_song_placement(self, song_placement: Config_Song_Placement) -> int | None:
+    def find_song_placement(self, song_placement: Config_Song_Placement) -> int:
         """
         get position of the placement
         """
@@ -94,7 +94,7 @@ class CT_Event_Manager:
                     return item["position"]
                 elif song_placement["position"] == "before":
                     return item["position"] - 1
-        return None
+        raise Exception(f"No item in agenda found matching {song_placement['agenda_item']}")
 
 
 class CT_Song_Manager:

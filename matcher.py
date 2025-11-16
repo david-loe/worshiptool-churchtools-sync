@@ -48,6 +48,9 @@ class Event_Matcher:
             if event["wt"]["songs"]:
                 ct_event_config = None
                 for ct_event in self.config["ct_events"]:
+                    if "campus_name" in ct_event and ct_event["campus_name"]:
+                        if event["ct"]["calendar"]["domainAttributes"]["campusName"] != ct_event["campus_name"]:
+                            break
                     if "regex" in ct_event and ct_event["regex"]:
                         regex = re.compile(ct_event["regex"])
                         if regex.search(event["ct"]["name"]):
