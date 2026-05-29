@@ -3,8 +3,17 @@ import requests
 import urllib.parse
 
 
+REQUEST_TIMEOUT = 30
+
+
+class WorshiptoolsApiError(Exception):
+    pass
+
+
 class Worshiptools_API:
     def __init__(self, email, password, account_id):
+        if not email or not password or not account_id:
+            raise WorshiptoolsApiError("WORSHIPTOOLS_EMAIL, WORSHIPTOOLS_PASSWORD, and WORSHIPTOOLS_ACCOUNT_ID are required")
         self.email = email
         self.password = password
         self.account_id = account_id
@@ -21,9 +30,9 @@ class Worshiptools_API:
 
     def _login(self):
         initial_url = "https://planning.worshiptools.com/app"
-        response = self.session.get(initial_url, allow_redirects=True)
+        response = self.session.get(initial_url, allow_redirects=True, timeout=REQUEST_TIMEOUT)
         if response.status_code not in [200, 302]:
-            raise Exception(
+            raise WorshiptoolsApiError(
                 f"Fehler beim Abrufen von authRequest oder weAuthState: {response.status_code}, {response.text}"
             )
         login_url = "https://auth.worshiptools.com/login"
@@ -32,13 +41,16 @@ class Worshiptools_API:
             "email": self.email,
             "password": self.password,
         }
-        response = self.session.post(login_url, data=data, allow_redirects=True)
+        response = self.session.post(login_url, data=data, allow_redirects=True, timeout=REQUEST_TIMEOUT)
         if response.status_code not in [200, 302]:
-            raise Exception(f"Fehler beim Login: {response.status_code}, {response.text}")
-        logging.info(f"Worshiptools Login Successful as {self.email}")
+            raise WorshiptoolsApiError(f"Fehler beim Login: {response.status_code}, {response.text}")
         self.bearer_token = self.session.cookies.get("weAuthToken")
+        if not self.bearer_token:
+            raise WorshiptoolsApiError("Worshiptools login did not return a bearer token")
+        logging.info(f"Worshiptools Login Successful as {self.email}")
 
-    def get(self, endpoint: str, params: dict = {}):
+    def get(self, endpoint: str, params: dict | None = None):
+        params = params or {}
         params_str = ""
         if params:
             params_str = "?" + urllib.parse.urlencode(params)
@@ -51,13 +63,14 @@ class Worshiptools_API:
                 "Origin": "https://planning.worshiptools.com",
             }
         )
-        response = self.session.get(api_url)
+        response = self.session.get(api_url, timeout=REQUEST_TIMEOUT)
         if response.status_code == 200:
             return response.json().get("response")
         logging.error(f"Fehler bei der API-Anfrage: {response.status_code}, {response.text}")
         return None
 
-    def get_all(self, endpoint: str, params: dict = {}):
+    def get_all(self, endpoint: str, params: dict | None = None):
+        params = dict(params or {})
         current_num = 0
         total_num = 1
         data = []
@@ -65,7 +78,9 @@ class Worshiptools_API:
             params.update({"start": current_num})
             res = self.get(endpoint, params)
             if not res:
-                raise Exception("Fehler bei Anfrage an Worshiptools API")
+                raise WorshiptoolsApiError("Fehler bei Anfrage an Worshiptools API")
+            if "numFound" not in res or "docs" not in res:
+                raise WorshiptoolsApiError(f"Worshiptools API response missing pagination metadata for {endpoint}")
             total_num = res["numFound"]
             data = data + res["docs"]
             current_num = len(data)

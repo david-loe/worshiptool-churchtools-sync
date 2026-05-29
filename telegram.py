@@ -3,6 +3,9 @@ import requests
 import os
 
 
+REQUEST_TIMEOUT = 30
+
+
 def send_telegram_message(message: str):
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
@@ -17,6 +20,6 @@ def send_telegram_message(message: str):
         "text": message,
     }
     logging.debug(f"Nachricht per Telegram gesendet: {message}")
-    response = requests.post(url, data=payload)
+    response = requests.post(url, data=payload, timeout=REQUEST_TIMEOUT)
     if response.status_code != 200:
         logging.error(f"Fehler beim Senden der Telegram-Nachricht: {response.text}")

@@ -23,7 +23,10 @@ class CT_Event_Manager:
         sort_placements = []
         for song_placement in song_placements:
             position = self.find_song_placement(song_placement)
-            placement_songs = slice_list(songs, song_placement["songs"])
+            try:
+                placement_songs = slice_list(songs, song_placement["songs"])
+            except ValueError as e:
+                raise AgendaException(str(e)) from e
             sort_placements.append({"position": position, "songs": placement_songs})
         placements = sorted(sort_placements, key=lambda p: p["position"])
 
@@ -94,7 +97,7 @@ class CT_Event_Manager:
                     return item["position"]
                 elif song_placement["position"] == "before":
                     return item["position"] - 1
-        raise Exception(f"No item in agenda found matching {song_placement['agenda_item']}")
+        raise AgendaException(f"No item in agenda found matching {song_placement['agenda_item']}")
 
 
 class CT_Song_Manager:
@@ -122,5 +125,6 @@ class CT_Song_Manager:
             author=wt_song["artist"],
             ccli=wt_song["ccli"],
         )
-        self.song_matcher.add_ct_song(new_song)
+        if new_song:
+            self.song_matcher.add_ct_song(new_song)
         return new_song

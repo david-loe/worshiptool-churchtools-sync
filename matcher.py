@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 import re
 from typing import TypedDict, Union
 from zoneinfo import ZoneInfo
@@ -28,8 +28,8 @@ class Event_Matcher:
         matches: list[Event_Match] = []
         for ct_event in ct_events:
             ct_event_start = datetime.strptime(ct_event["startDate"], "%Y-%m-%dT%H:%M:%SZ").replace(
-                tzinfo=self.ct_tzinfo
-            )
+                tzinfo=timezone.utc
+            ).astimezone(self.ct_tzinfo)
             for wt_event in wt_events:
                 for wt_event_time in wt_event["times"]:
                     wt_event_start = (
@@ -50,7 +50,7 @@ class Event_Matcher:
                 for ct_event in self.config["ct_events"]:
                     if "campus_name" in ct_event and ct_event["campus_name"]:
                         if event["ct"]["calendar"]["domainAttributes"]["campusName"] != ct_event["campus_name"]:
-                            break
+                            continue
                     if "regex" in ct_event and ct_event["regex"]:
                         regex = re.compile(ct_event["regex"])
                         if regex.search(event["ct"]["name"]):

@@ -10,6 +10,13 @@ from telegram import send_telegram_message
 from custom_types import CT_Song
 
 
+REQUEST_TIMEOUT = 30
+
+
+class ChurchtoolsApiError(Exception):
+    pass
+
+
 class Churchtools_API:
     def __init__(
         self,
@@ -27,13 +34,23 @@ class Churchtools_API:
             ct_password: indirect login using user and password combination
 
         """
+        if not base_url:
+            raise ChurchtoolsApiError("CHURCHTOOLS_BASE_URL is required")
+        if not ct_token and not (ct_user and ct_password):
+            raise ChurchtoolsApiError("ChurchTools login token or username/password is required")
+
         self.session = None
         self.base_url = base_url
 
         if ct_token is not None:
-            self.login_ct_rest_api(ct_token=ct_token)
+            login_result = self.login_ct_rest_api(ct_token=ct_token)
         elif ct_user is not None and ct_password is not None:
-            self.login_ct_rest_api(ct_user=ct_user, ct_password=ct_password)
+            login_result = self.login_ct_rest_api(ct_user=ct_user, ct_password=ct_password)
+        else:
+            login_result = False
+
+        if not login_result:
+            raise ChurchtoolsApiError("ChurchTools login failed")
 
         logging.debug("ChurchToolsApi init finished")
 
@@ -57,7 +74,7 @@ class Churchtools_API:
             logging.info("Trying Login with token")
             url = self.base_url + "/api/whoami"
             headers = {"Authorization": "Login " + kwargs["ct_token"]}
-            response = self.session.get(url=url, headers=headers)
+            response = self.session.get(url=url, headers=headers, timeout=REQUEST_TIMEOUT)
 
             if response.status_code == 200:
                 response_content = json.loads(response.content)
@@ -77,7 +94,7 @@ class Churchtools_API:
             logging.info("Trying Login with Username/Password")
             url = self.base_url + "/api/login"
             data = {"username": kwargs["ct_user"], "password": kwargs["ct_password"]}
-            response = self.session.post(url=url, data=data)
+            response = self.session.post(url=url, data=data, timeout=REQUEST_TIMEOUT)
 
             if response.status_code == 200:
                 logging.info("User/Password Login Successful")
@@ -99,7 +116,7 @@ class Churchtools_API:
         :rtype: str
         """
         url = self.base_url + "/api/csrftoken"
-        response = self.session.get(url=url)
+        response = self.session.get(url=url, timeout=REQUEST_TIMEOUT)
         if response.status_code == 200:
             csrf_token = json.loads(response.content)["data"]
             logging.debug("CSRF Token erfolgreich abgerufen %s", csrf_token)
@@ -119,7 +136,9 @@ class Churchtools_API:
         json_data = json.dumps(data, cls=CustomEncoder)
         logging.info(f"POST {api_url}\n{json_data}")
 
-        response = self.session.post(api_url, data=json_data, headers={"Content-Type": "application/json"})
+        response = self.session.post(
+            api_url, data=json_data, headers={"Content-Type": "application/json"}, timeout=REQUEST_TIMEOUT
+        )
 
         if response.status_code == 200:
             return response.json()
@@ -131,7 +150,7 @@ class Churchtools_API:
         data = {"func": "addItemEventRelation", "item_id": item_id, "event_id": event_id}
         logging.info(f"POST {api_url}\n{data}")
 
-        response = self.session.post(api_url, data=data)
+        response = self.session.post(api_url, data=data, timeout=REQUEST_TIMEOUT)
 
         if response.status_code == 200:
             return json.loads(response.content)
@@ -143,7 +162,7 @@ class Churchtools_API:
         data = {"func": "loadAgendas", "ids[0]": agenda_id}
         logging.info(f"POST {api_url}\n{data}")
 
-        response = self.session.post(api_url, data=data)
+        response = self.session.post(api_url, data=data, timeout=REQUEST_TIMEOUT)
 
         if response.status_code == 200:
             return json.loads(response.content)
@@ -156,7 +175,9 @@ class Churchtools_API:
         json_data = json.dumps(data, cls=CustomEncoder)
         logging.info(f"POST {api_url}\n{json_data}")
 
-        response = self.session.post(api_url, data=json_data, headers={"Content-Type": "application/json"})
+        response = self.session.post(
+            api_url, data=json_data, headers={"Content-Type": "application/json"}, timeout=REQUEST_TIMEOUT
+        )
 
         if response.status_code == 200:
             return response.json()
@@ -168,7 +189,7 @@ class Churchtools_API:
         data = {"func": "loadAgendaItems", "agenda_id": agenda_id}
         logging.info(f"POST {api_url}\n{data}")
 
-        response = self.session.post(api_url, data=data)
+        response = self.session.post(api_url, data=data, timeout=REQUEST_TIMEOUT)
 
         if response.status_code == 200:
             return json.loads(response.content)
@@ -181,36 +202,41 @@ class Churchtools_API:
         data = {"name": name, "categoryId": categoryId, "author": author, "copyright": copyright, "ccli": ccli}
         response = self.post("songs", data)
 
-        if response:
-            new_song: CT_Song = response["data"]
-            logging.debug("Song created successful with ID=%s", new_song["id"])
-            send_telegram_message(
-                f"""*Neuer Song*
+        if not response:
+            logging.info("Creating song failed")
+            return None
+
+        new_song: CT_Song = response["data"]
+        logging.debug("Song created successful with ID=%s", new_song["id"])
+        send_telegram_message(
+            f"""*Neuer Song*
 {new_song['name']}, {new_song['author']}
 https://songselect.ccli.com/songs/{new_song['ccli']}"""
-            )
+        )
 
-            a_response = self.post(f"songs/{new_song['id']}/arrangements", {"name": "Standard-Arrangement"})
-            if a_response:
-                new_song["arrangements"].append(a_response["data"])
-                return new_song
+        a_response = self.post(f"songs/{new_song['id']}/arrangements", {"name": "Standard-Arrangement"})
+        if not a_response:
+            logging.info("Creating default arrangement failed for song ID=%s", new_song["id"])
+            return None
 
-        logging.info("Creating song failed with %s", response.status_code)
-        return None
+        new_song["arrangements"].append(a_response["data"])
+        return new_song
 
-    def get(self, endpoint: str, params={}):
+    def get(self, endpoint: str, params=None):
+        params = params or {}
         params_str = ""
         if params:
             params_str = "?" + urllib.parse.urlencode(params)
         api_url = f"{self.base_url}/api/{endpoint}{params_str}"
         logging.info(f"GET {api_url}")
-        response = self.session.get(api_url)
+        response = self.session.get(api_url, timeout=REQUEST_TIMEOUT)
         if response.status_code == 200:
             return response.json()
         logging.error(f"Fehler bei der API-Anfrage: {response.status_code}, {response.text}")
         return None
 
-    def get_all(self, endpoint: str, params: dict = {}):
+    def get_all(self, endpoint: str, params: dict | None = None):
+        params = dict(params or {})
         current_page = 0
         last_page = 1
         data = []
@@ -218,6 +244,10 @@ https://songselect.ccli.com/songs/{new_song['ccli']}"""
             current_page = current_page + 1
             params.update({"page": current_page})
             res = self.get(endpoint, params)
+            if not res:
+                raise ChurchtoolsApiError(f"ChurchTools API request failed for {endpoint} page {current_page}")
+            if "meta" not in res or "pagination" not in res["meta"] or "data" not in res:
+                raise ChurchtoolsApiError(f"ChurchTools API response missing pagination metadata for {endpoint}")
             last_page = res["meta"]["pagination"]["lastPage"]
             data = data + res["data"]
         return {"data": data}
@@ -239,7 +269,7 @@ https://songselect.ccli.com/songs/{new_song['ccli']}"""
         url = self.base_url + "/api/event/masterdata"
 
         headers = {"accept": "application/json"}
-        response = self.session.get(url=url, headers=headers)
+        response = self.session.get(url=url, headers=headers, timeout=REQUEST_TIMEOUT)
 
         if response.status_code == 200:
             response_content = json.loads(response.content)
@@ -267,6 +297,7 @@ https://songselect.ccli.com/songs/{new_song['ccli']}"""
             api_url,
             data=json_data,
             headers={"Content-Type": "application/json"},
+            timeout=REQUEST_TIMEOUT,
         )
         if response.status_code == 200 or response.status_code == 201:
             return response.json()
