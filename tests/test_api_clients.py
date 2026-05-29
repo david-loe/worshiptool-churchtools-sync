@@ -25,6 +25,7 @@ class ChurchSession:
         self.login_status = login_status
         self.get_calls = []
         self.post_calls = []
+        self.put_calls = []
 
     def get(self, url, **kwargs):
         self.get_calls.append((url, kwargs))
@@ -36,6 +37,10 @@ class ChurchSession:
 
     def post(self, url, **kwargs):
         self.post_calls.append((url, kwargs))
+        return Response(200, {"data": {"id": 1}})
+
+    def put(self, url, **kwargs):
+        self.put_calls.append((url, kwargs))
         return Response(200, {"data": {"id": 1}})
 
 
@@ -80,6 +85,30 @@ def test_churchtools_create_song_handles_failed_arrangement(monkeypatch):
     api.post = post
 
     assert api.create_song("Song", 1) is None
+
+
+def test_churchtools_create_agenda_item_uses_before_id():
+    api = object.__new__(Churchtools_API)
+    api.base_url = "https://example.church.tools"
+    api.session = ChurchSession()
+
+    assert api.create_agenda_item(99, {"type": "song"}, before_id=13) == {"data": {"id": 1}}
+
+    url, kwargs = api.session.post_calls[0]
+    assert url == "https://example.church.tools/api/events/99/agenda/items?before_id=13"
+    assert json.loads(kwargs["data"]) == {"type": "song"}
+
+
+def test_churchtools_update_agenda_item_uses_after_id():
+    api = object.__new__(Churchtools_API)
+    api.base_url = "https://example.church.tools"
+    api.session = ChurchSession()
+
+    assert api.update_agenda_item(99, 12, {"type": "song"}, after_id=11) == {"data": {"id": 1}}
+
+    url, kwargs = api.session.put_calls[0]
+    assert url == "https://example.church.tools/api/events/99/agenda/items/12?after_id=11"
+    assert json.loads(kwargs["data"]) == {"type": "song"}
 
 
 class WorshipSession:

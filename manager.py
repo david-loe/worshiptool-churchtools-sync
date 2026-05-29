@@ -33,7 +33,7 @@ class CT_Event_Manager:
         def place_placement(placement, position_correction: int):
             count_new = 0
             for i, song in enumerate(placement["songs"]):
-                if self.place_song(song, placement["position"] + i + position_correction, position_correction):
+                if self.place_song(song, placement["position"] + i + position_correction):
                     count_new = count_new + 1
             return count_new
 
@@ -41,44 +41,62 @@ class CT_Event_Manager:
         for placement in placements:
             position_correction = place_placement(placement, position_correction) + position_correction
 
-    def place_song(self, ct_song: CT_Song, position: int, position_correction: int) -> bool:
+    def place_song(self, ct_song: CT_Song, position: int, position_correction: int = 0) -> bool:
+        items = self.ct_agenda.setdefault("items", [])
+        target_position = max(0, position)
+        target_item = items[target_position] if target_position < len(items) else None
+        payload = self.build_song_item_payload(ct_song)
+
+        if target_item and target_item["type"] == "song":
+            if target_item.get("song", {}).get("songId") == ct_song["id"]:
+                return False
+            response = self.ct_api.update_agenda_item(self.ct_event_id, target_item["id"], payload)
+            if response:
+                items[target_position] = self.build_local_agenda_item(response, payload, ct_song, target_item)
+                self.update_agenda_positions()
+            return False
+
+        before_id = target_item["id"] if target_item else None
+        after_id = None if before_id or not items else items[-1]["id"]
+        response = self.ct_api.create_agenda_item(self.ct_event_id, payload, before_id=before_id, after_id=after_id)
+        if not response:
+            return False
+
+        items.insert(target_position, self.build_local_agenda_item(response, payload, ct_song))
+        self.update_agenda_positions()
+        return True
+
+    def build_song_item_payload(self, ct_song: CT_Song) -> dict:
         item = {
-            "agenda_id": self.ct_agenda["id"],
-            "arrangement_id": ct_song["arrangements"][0]["id"],
-            "bezeichnung": "",
-            "header_yn": "0",
+            "type": "song",
+            "title": "",
             "responsible": "",
-            "sortkey": position,
             "duration": 0,
-            "event_ids": [self.ct_event_id],
+            "arrangementId": ct_song["arrangements"][0]["id"],
         }
-        item.update(self.config["ct_item_defaults"])
-        new_item = (
-            len(self.ct_agenda["items"]) <= position - position_correction
-            or self.ct_agenda["items"][position - position_correction]["type"] != "song"
-        )
-        skip = False
-        if new_item:
-            self.shuffle_agenda_items(position)
-        else:
-            item["id"] = self.ct_agenda["items"][position - position_correction]["id"]
-            skip = self.ct_agenda["items"][position - position_correction]["song"]["songId"] == ct_song["id"]
+        defaults = self.config.get("ct_item_defaults", {})
+        if "bezeichnung" in defaults and "title" not in defaults:
+            item["title"] = defaults["bezeichnung"]
+        for key in ("title", "note", "responsible", "duration"):
+            if key in defaults:
+                item[key] = defaults[key]
+        return item
 
-        if not skip:
-            self.ct_api.save_item_ajax(item)
-        return new_item
+    def build_local_agenda_item(self, response: dict, payload: dict, ct_song: CT_Song, current_item: dict | None = None):
+        item = dict(current_item or {})
+        response_item = response.get("data") if response else None
+        if isinstance(response_item, dict):
+            item.update(response_item)
+        for key, value in payload.items():
+            item.setdefault(key, value)
+        item["type"] = "song"
+        item["song"] = dict(item.get("song", {}))
+        item["song"]["songId"] = ct_song["id"]
+        return item
 
-    def shuffle_agenda_items(self, new_item_position: int):
-        items = self.ct_api.load_agenda_items_ajax(self.ct_agenda["id"])["data"]
-        agenda = self.ct_api.load_agenda_ajax(self.ct_agenda["id"])["data"][str(self.ct_agenda["id"])]
-        changed = False
-        for id, item in items.items():
-            if int(item["sortkey"]) >= new_item_position:
-                changed = True
-                item["sortkey"] = int(item["sortkey"]) + 1
-        if changed:
-            agenda["items"] = items
-            self.ct_api.save_agenda_ajax(agenda)
+    def update_agenda_positions(self):
+        for position, item in enumerate(self.ct_agenda["items"]):
+            item["position"] = position
 
     def find_song_placement(self, song_placement: Config_Song_Placement) -> int:
         """

@@ -2,13 +2,12 @@ from datetime import datetime, date
 from decimal import Decimal
 import json
 import logging
-from typing import Dict, Optional
+from typing import Optional
 import requests
 import urllib.parse
 from telegram import send_telegram_message
 
 from custom_types import CT_Song
-
 
 REQUEST_TIMEOUT = 30
 
@@ -127,75 +126,6 @@ class Churchtools_API:
         )
         return None
 
-    def save_item_ajax(self, data: Dict[str, str | int]):
-        """
-        data: {"id":"83197","agenda_id":"3299","arrangement_id":"233","func":"saveItem", "bezeichnung": "", "header_yn": "0", "responsible":"[Lobpreisleitung]", "sortkey":12, "duration":300}
-        """
-        api_url = f"{self.base_url}/index.php?q=churchservice/ajax"
-        data["func"] = "saveItem"
-        json_data = json.dumps(data, cls=CustomEncoder)
-        logging.info(f"POST {api_url}\n{json_data}")
-
-        response = self.session.post(
-            api_url, data=json_data, headers={"Content-Type": "application/json"}, timeout=REQUEST_TIMEOUT
-        )
-
-        if response.status_code == 200:
-            return response.json()
-        logging.error(f"Fehler bei der API-Anfrage: {response.status_code}, {response.text}")
-        return None
-
-    def add_item_event_relation_ajax(self, item_id: int, event_id: int):
-        api_url = f"{self.base_url}/index.php?q=churchservice/ajax"
-        data = {"func": "addItemEventRelation", "item_id": item_id, "event_id": event_id}
-        logging.info(f"POST {api_url}\n{data}")
-
-        response = self.session.post(api_url, data=data, timeout=REQUEST_TIMEOUT)
-
-        if response.status_code == 200:
-            return json.loads(response.content)
-        logging.error(f"Fehler bei der API-Anfrage: {response.status_code}, {response.text}")
-        return None
-
-    def load_agenda_ajax(self, agenda_id: int):
-        api_url = f"{self.base_url}/index.php?q=churchservice/ajax"
-        data = {"func": "loadAgendas", "ids[0]": agenda_id}
-        logging.info(f"POST {api_url}\n{data}")
-
-        response = self.session.post(api_url, data=data, timeout=REQUEST_TIMEOUT)
-
-        if response.status_code == 200:
-            return json.loads(response.content)
-        logging.error(f"Fehler bei der API-Anfrage: {response.status_code}, {response.text}")
-        return None
-
-    def save_agenda_ajax(self, data):
-        api_url = f"{self.base_url}/index.php?q=churchservice/ajax"
-        data["func"] = "saveAgenda"
-        json_data = json.dumps(data, cls=CustomEncoder)
-        logging.info(f"POST {api_url}\n{json_data}")
-
-        response = self.session.post(
-            api_url, data=json_data, headers={"Content-Type": "application/json"}, timeout=REQUEST_TIMEOUT
-        )
-
-        if response.status_code == 200:
-            return response.json()
-        logging.error(f"Fehler bei der API-Anfrage: {response.status_code}, {response.text}")
-        return None
-
-    def load_agenda_items_ajax(self, agenda_id: int):
-        api_url = f"{self.base_url}/index.php?q=churchservice/ajax"
-        data = {"func": "loadAgendaItems", "agenda_id": agenda_id}
-        logging.info(f"POST {api_url}\n{data}")
-
-        response = self.session.post(api_url, data=data, timeout=REQUEST_TIMEOUT)
-
-        if response.status_code == 200:
-            return json.loads(response.content)
-        logging.error(f"Fehler bei der API-Anfrage: {response.status_code}, {response.text}")
-        return None
-
     def create_song(self, name: str, categoryId: int, author=None, copyright=None, ccli=None):
         """Method to create a new song and add arrangement"""
 
@@ -208,11 +138,9 @@ class Churchtools_API:
 
         new_song: CT_Song = response["data"]
         logging.debug("Song created successful with ID=%s", new_song["id"])
-        send_telegram_message(
-            f"""*Neuer Song*
+        send_telegram_message(f"""*Neuer Song*
 {new_song['name']}, {new_song['author']}
-https://songselect.ccli.com/songs/{new_song['ccli']}"""
-        )
+https://songselect.ccli.com/songs/{new_song['ccli']}""")
 
         a_response = self.post(f"songs/{new_song['id']}/arrangements", {"name": "Standard-Arrangement"})
         if not a_response:
@@ -289,8 +217,11 @@ https://songselect.ccli.com/songs/{new_song['ccli']}"""
         )
         return None
 
-    def post(self, endpoint: str, data):
-        api_url = f"{self.base_url}/api/{endpoint}"
+    def post(self, endpoint: str, data, params=None):
+        params_str = ""
+        if params:
+            params_str = "?" + urllib.parse.urlencode(params)
+        api_url = f"{self.base_url}/api/{endpoint}{params_str}"
         json_data = json.dumps(data, cls=CustomEncoder)
         logging.info(f"POST {api_url}\n{json_data}")
         response = self.session.post(
@@ -302,6 +233,43 @@ https://songselect.ccli.com/songs/{new_song['ccli']}"""
         if response.status_code == 200 or response.status_code == 201:
             return response.json()
         logging.error(f"Fehler bei der API-Anfrage: {response.status_code}, {response.text}")
+        return None
+
+    def put(self, endpoint: str, data, params=None):
+        params_str = ""
+        if params:
+            params_str = "?" + urllib.parse.urlencode(params)
+        api_url = f"{self.base_url}/api/{endpoint}{params_str}"
+        json_data = json.dumps(data, cls=CustomEncoder)
+        logging.info(f"PUT {api_url}\n{json_data}")
+        response = self.session.put(
+            api_url,
+            data=json_data,
+            headers={"Content-Type": "application/json"},
+            timeout=REQUEST_TIMEOUT,
+        )
+        if response.status_code in (200, 201):
+            return response.json()
+        logging.error(f"Fehler bei der API-Anfrage: {response.status_code}, {response.text}")
+        return None
+
+    def create_agenda_item(self, event_id: int, item: dict, before_id: int | None = None, after_id: int | None = None):
+        params = self._position_params(before_id, after_id)
+        return self.post(f"events/{event_id}/agenda/items", item, params=params)
+
+    def update_agenda_item(
+        self, event_id: int, item_id: int, item: dict, before_id: int | None = None, after_id: int | None = None
+    ):
+        params = self._position_params(before_id, after_id)
+        return self.put(f"events/{event_id}/agenda/items/{item_id}", item, params=params)
+
+    def _position_params(self, before_id: int | None = None, after_id: int | None = None):
+        if before_id is not None and after_id is not None:
+            raise ValueError("before_id and after_id cannot be used together")
+        if before_id is not None:
+            return {"before_id": before_id}
+        if after_id is not None:
+            return {"after_id": after_id}
         return None
 
 
