@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling==1.32.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "worshiptool-churchtools-sync-backend"
+version = "0.1.0"
+description = "Multi-tenant WorshipTools to ChurchTools synchronization API"
+requires-python = ">=3.14"
+dependencies = [
+  "alembic==1.19.1",
+  "argon2-cffi==25.1.0",
+  "cryptography==50.0.0",
+  "croniter==6.2.4",
+  "dramatiq[redis]==2.2.0",
+  "email-validator==2.3.0",
+  "fastapi==0.141.1",
+  "httpx==0.28.1",
+  "psycopg[binary]==3.3.4",
+  "pydantic==2.13.4",
+  "pydantic-settings==2.15.0",
+  "pyotp==2.10.0",
+  "pywebpush==2.4.0",
+  "regex==2026.7.19",
+  "redis==8.1.0",
+  "sqlalchemy==2.0.52",
+  "uvicorn[standard]==0.52.4",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest==9.1.1",
+  "pytest-cov==7.1.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
