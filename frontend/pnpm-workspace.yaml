@@ -1,0 +1,4 @@
+allowBuilds:
+  sharp: false
+overrides:
+  sharp: 0.35.3

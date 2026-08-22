@@ -1,0 +1,52 @@
+{
+	admin off
+	auto_https off
+	servers {
+		# The Compose gateway is commonly placed behind a host/load-balancer on a
+		# private address. Parse forwarded addresses right-to-left so a client
+		# cannot spoof the IP used by the backend's authentication rate limits.
+		trusted_proxies static private_ranges
+		trusted_proxies_strict
+		client_ip_headers X-Forwarded-For X-Real-IP
+	}
+}
+
+:8080 {
+	root * /srv
+	encode zstd gzip
+
+	request_body {
+		max_size 1MB
+	}
+
+	# Mutually exclusive handles keep the SPA fallback from rewriting API and
+	# health requests before Caddy reaches the reverse proxy.
+	handle /healthz {
+		respond 200
+	}
+
+	@backend path /api/* /health/*
+	handle @backend {
+		reverse_proxy {$API_UPSTREAM:api:8000} {
+			header_up X-Real-IP {client_ip}
+		}
+	}
+
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; manifest-src 'self'; worker-src 'self'"
+	}
+
+	handle {
+		@immutable path_regexp immutable ^/assets/.+-[A-Za-z0-9_-]{8,}\.(js|css|woff2|png|svg)$
+		header @immutable Cache-Control "public, max-age=31536000, immutable"
+		header /index.html Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
+}

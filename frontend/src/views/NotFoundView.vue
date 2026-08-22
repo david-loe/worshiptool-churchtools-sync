@@ -1,0 +1,1 @@
+<template><main class="not-found"><span>404</span><h1>Diese Seite gibt es nicht.</h1><p>Vielleicht wurde der Link geändert oder du hast keinen Zugriff mehr.</p><RouterLink class="button button-primary" to="/dashboard">Zur Übersicht</RouterLink></main></template>
