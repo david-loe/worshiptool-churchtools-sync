@@ -1,0 +1,17 @@
+# Image-only override used by CI after the two production Dockerfiles have
+# already been built and loaded into the runner's local engine.
+services:
+  migrate:
+    image: worship-sync-backend:ci
+  api:
+    image: worship-sync-backend:ci
+  scheduler:
+    image: worship-sync-backend:ci
+  worker:
+    image: worship-sync-backend:ci
+  notification-worker:
+    image: worship-sync-backend:ci
+  bootstrap-admin:
+    image: worship-sync-backend:ci
+  gateway:
+    image: worship-sync-frontend:ci
