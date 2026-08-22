@@ -2,7 +2,6 @@ import argparse
 import logging
 import os
 import sys
-import traceback
 import yaml
 from dotenv import load_dotenv
 from cache import Cacher, YamlDatabase
@@ -12,9 +11,6 @@ from matcher import Event_Matcher, Song_Matcher
 from telegram import send_telegram_message
 from worshiptools_api import Worshiptools_API
 from churchtools_api import Churchtools_API
-import io
-
-log_stream = io.StringIO()
 
 
 def main():
@@ -33,18 +29,19 @@ def main():
 
     logging.basicConfig(
         level=log_level,
-        handlers=[
-            logging.StreamHandler(sys.stdout),  # Logs auf die Konsole
-            logging.StreamHandler(log_stream),  # Logs in StringIO
-        ],
+        handlers=[logging.StreamHandler(sys.stdout)],
     )
 
     # YAML-Konfigurationsdatei laden
     try:
         with open(args.config, "r", encoding="utf-8") as file:
             config: Config = yaml.safe_load(file)
-    except Exception as e:
-        logging.error(f"Fehler beim Laden der Konfigurationsdatei {args.config}: {e}")
+    except Exception as error:
+        logging.error(
+            "Fehler beim Laden der Konfigurationsdatei %s (Typ: %s)",
+            args.config,
+            type(error).__name__,
+        )
         sys.exit(1)
 
     cacher = Cacher(YamlDatabase(args.db))
@@ -83,10 +80,14 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except Exception as e:
-        # Hier landen nur Fehler, die nicht bereits im main()-Code abgefangen wurden
-        logging.critical("Unbehandelter Fehler in Skript", exc_info=True)
-        # Vollständigen Log extrahieren
-        full_log = log_stream.getvalue()
-        send_telegram_message(full_log)
+    except Exception as error:
+        # Provider-/Bibliotheksfehler können Antwortdaten oder URLs enthalten.
+        # Auch die archivierte CLI sendet deshalb weder Tracebacks noch den
+        # vollständigen Prozesslog an Telegram.
+        safe_message = (
+            "Unbehandelter Fehler im Sync "
+            f"(Typ: {type(error).__name__})"
+        )
+        logging.critical(safe_message)
+        send_telegram_message(safe_message)
         sys.exit(1)
