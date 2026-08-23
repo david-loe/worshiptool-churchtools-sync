@@ -108,12 +108,29 @@ jobs:
             --volume "$GITHUB_WORKSPACE/deploy/postgres/001-create-app-role.sh:/init.sh:ro" \
             postgres:18-alpine@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2 \
             sh /init.sh
-      - name: Migrate fresh PostgreSQL 18 database
+      - name: Migrate PostgreSQL 18 database to the pre-repair revision
         env:
           PYTHONPATH: backend
           WT_SYNC_DATABASE_URL: postgresql+psycopg://worshipsync_api:api-ci-password@127.0.0.1:5432/worshipsync
           WT_SYNC_DATABASE_OWNER_URL: postgresql+psycopg://worshipsync_owner:owner-ci-password@127.0.0.1:5432/worshipsync
-        run: alembic -c backend/alembic.ini upgrade head
+        run: alembic -c backend/alembic.ini upgrade 20260822_0011
+      - name: Reproduce and repair missing worker privileges
+        env:
+          PYTHONPATH: backend
+          WT_SYNC_DATABASE_URL: postgresql+psycopg://worshipsync_api:api-ci-password@127.0.0.1:5432/worshipsync
+          WT_SYNC_DATABASE_OWNER_URL: postgresql+psycopg://worshipsync_owner:owner-ci-password@127.0.0.1:5432/worshipsync
+        run: |
+          if PGPASSWORD=worker-ci-password psql --host 127.0.0.1 \
+            --username worshipsync_worker --dbname worshipsync \
+            --command 'SELECT id FROM workspaces LIMIT 0 FOR UPDATE'; then
+            echo "Worker unexpectedly locked workspaces before the repair" >&2
+            exit 1
+          fi
+          alembic -c backend/alembic.ini upgrade head
+          PGPASSWORD=worker-ci-password psql --host 127.0.0.1 \
+            --username worshipsync_worker --dbname worshipsync \
+            --set ON_ERROR_STOP=1 \
+            --command 'SELECT id FROM workspaces LIMIT 0 FOR UPDATE'
       - name: Rotate all role passwords through secret files
         env:
           PGPASSWORD: owner-ci-password

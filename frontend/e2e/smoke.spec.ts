@@ -237,6 +237,7 @@ test('Onboarding setzt gespeicherte Verbindungen und ein deaktiviertes Profil fo
   }
   const disabledProfile = { ...profile, enabled: false }
   const requests: string[] = []
+  let profileRevision = disabledProfile.revision
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname
@@ -256,12 +257,15 @@ test('Onboarding setzt gespeicherte Verbindungen und ein deaktiviertes Profil fo
     if (path.endsWith(`/connections/${target.id}/metadata`)) return json(route, { data: { calendars: [], campuses: [], song_categories: [{ id: '4', name: 'Lobpreis' }] }, retrieved_at: profile.updated_at })
     if (path.endsWith('/profiles') && request.method() === 'GET') return json(route, { items: [disabledProfile], total: 1, limit: 200, offset: 0 })
     if (path.endsWith(`/profiles/${profile.id}`) && request.method() === 'PATCH') {
-      expect(request.headers()['if-match']).toBe('"1"')
-      return json(route, { ...disabledProfile, revision: 2 })
+      expect(request.headers()['if-match']).toBe(`"${profileRevision}"`)
+      profileRevision += 1
+      return json(route, { ...disabledProfile, revision: profileRevision })
     }
+    if (path.endsWith(`/profiles/${profile.id}`) && request.method() === 'GET') return json(route, { ...disabledProfile, revision: profileRevision })
     if (path.endsWith(`/profiles/${profile.id}/preview`)) {
       return json(route, { id: 'preview-1', workspace_id: workspace.id, profile_id: profile.id, status: 'succeeded', trigger: 'manual', dry_run: true, created_at: profile.created_at, plan: {}, error: null, actions: [], config_revision: 2 })
     }
+    if (path.endsWith('/runs/preview-1/actions')) return json(route, { items: [], total: 0, limit: 8, offset: 0, status_counts: {} })
     return json(route, { title: 'Nicht gefunden', status: 404 }, 404)
   })
 
@@ -273,8 +277,18 @@ test('Onboarding setzt gespeicherte Verbindungen und ein deaktiviertes Profil fo
   await page.getByLabel('WorshipTools Account-ID').fill('tenant-one')
   await page.getByRole('button', { name: 'Verbinden und weiter' }).click()
   await expect(page.getByRole('heading', { name: 'Erstes Sync-Profil' })).toBeVisible()
+  await expect(page.getByText('Alle Songs landen nach dem ChurchTools-Header „Lobpreis“.')).toBeVisible()
+  await page.getByText('Wo finde ich die frühere YAML-Konfiguration?').click()
+  await expect(page.getByText('song_placements')).toBeVisible()
+  await expect(page.getByText('Platzierung in ChurchTools')).toBeVisible()
   await page.getByRole('button', { name: 'Speichern und Vorschau' }).click()
   await expect(page.getByText('Vorschau abgeschlossen')).toBeVisible()
+
+  const previewsBeforeEditor = requests.filter((request) => request.endsWith(`/profiles/${profile.id}/preview`)).length
+  await page.getByRole('button', { name: 'Zurück' }).click()
+  await page.getByRole('button', { name: 'Alle Einstellungen bearbeiten' }).click()
+  await expect(page).toHaveURL(`/profiles/${profile.id}`)
+  expect(requests.filter((request) => request.endsWith(`/profiles/${profile.id}/preview`))).toHaveLength(previewsBeforeEditor)
 
   expect(requests).not.toContain(`POST /api/v1/workspaces/${workspace.id}/connections`)
   expect(requests).not.toContain(`POST /api/v1/workspaces/${workspace.id}/profiles`)

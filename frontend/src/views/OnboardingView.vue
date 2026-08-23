@@ -27,6 +27,7 @@ const savedProfile = ref<SyncProfile | null>(null)
 const preview = ref<SyncRun | null>(null)
 const previewActions = ref<SyncAction[]>([])
 const songCategories = ref<ProviderOption[]>([])
+const profileForm = ref<HTMLFormElement | null>(null)
 const steps = ['Workspace', 'Verbindungen', 'Sync-Profil', 'Prüfen']
 const previewApproved = computed(() => preview.value?.status === 'succeeded' || preview.value?.status === 'partial')
 let previewPollTimer: number | undefined
@@ -170,9 +171,10 @@ function providerInputError(provider: Provider): string | null {
     : 'WorshipTools-E-Mail, Passwort und Account-ID sind erforderlich.'
 }
 
-async function createProfile(): Promise<void> {
+async function saveProfile(): Promise<SyncProfile | null> {
   const workspaceId = workspaceStore.activeId
-  if (!workspaceId) return
+  if (!workspaceId) return null
+  let persisted: SyncProfile | null = null
   await run(async () => {
     const payload = sanitizeProfile(profile.value)
     const profiles = await api.allPages<SyncProfile>(`/workspaces/${workspaceId}/profiles`, { workspaceId, cache: 'no-store' })
@@ -212,11 +214,24 @@ async function createProfile(): Promise<void> {
         )
       }
     }
-    step.value = 4
-    preview.value = null
-    previewActions.value = []
-    await loadPreview()
+    persisted = savedProfile.value
   })
+  return persisted
+}
+
+async function createProfile(): Promise<void> {
+  const saved = await saveProfile()
+  if (!saved) return
+  step.value = 4
+  preview.value = null
+  previewActions.value = []
+  await loadPreview()
+}
+
+async function editProfileDetails(): Promise<void> {
+  if (!profileForm.value?.reportValidity()) return
+  const saved = await saveProfile()
+  if (saved) await router.push(`/profiles/${saved.id}`)
 }
 
 async function loadPreview(): Promise<void> {
@@ -343,8 +358,8 @@ onBeforeUnmount(() => { if (previewPollTimer) window.clearTimeout(previewPollTim
         <div class="wizard-actions"><button class="button button-secondary" type="button" @click="step = 1">Zurück</button><button class="button button-primary" type="submit" :disabled="loading">{{ loading ? 'Verbindungen werden geprüft …' : 'Verbinden und weiter' }}</button></div>
       </form>
 
-      <form v-else-if="step === 3" class="wizard-content" @submit.prevent="createProfile">
-        <div class="wizard-copy"><p class="eyebrow">Schritt 3 von 4</p><h1>Erstes Sync-Profil</h1><p>Diese sicheren Standardwerte kannst du später jederzeit anpassen.</p></div>
+      <form v-else-if="step === 3" ref="profileForm" class="wizard-content" @submit.prevent="createProfile">
+        <div class="wizard-copy"><p class="eyebrow">Schritt 3 von 4</p><h1>Erstes Sync-Profil</h1><p>Hier legst du die Grundwerte fest. Event-Auswahl und genaue Song-Platzierung kannst du vor der Vorschau im vollständigen Profil-Editor anpassen.</p></div>
         <div class="form-grid">
           <label class="span-2"><span>Profilname</span><input v-model="profile.name" required /></label>
           <label><span>Vorausschau</span><div class="input-suffix"><input v-model.number="profile.lookahead_days" type="number" min="1" max="90" required /><span>Tage</span></div></label>
@@ -353,8 +368,17 @@ onBeforeUnmount(() => { if (previewPollTimer) window.clearTimeout(previewPollTim
           <label v-if="profile.create_missing_songs"><span>ChurchTools-Songkategorie</span><select v-if="songCategories.length" v-model.number="profile.song_category_id" required><option :value="null" disabled>Auswählen …</option><option v-for="category in songCategories" :key="category.id" :value="Number(category.id)">{{ category.name }}</option></select><input v-else v-model.number="profile.song_category_id" type="number" min="1" required placeholder="Kategorie-ID" /></label>
           <label v-if="profile.create_missing_songs"><span>Arrangement-Name</span><input v-model="profile.arrangement_name" required maxlength="50" /></label>
           <label class="span-2 check-card"><input v-model="profile.notification_preferences.email" type="checkbox" /><span><strong>E-Mail bei Problemen</strong><small>Erfolge werden standardmäßig nicht gemeldet.</small></span></label>
+          <aside class="profile-configuration-note span-2">
+            <strong>Aktuelle Platzierung</strong>
+            <p>Events werden über ihre exakte Startzeit zugeordnet. Alle Songs landen nach dem ChurchTools-Header „Lobpreis“.</p>
+            <details>
+              <summary>Wo finde ich die frühere YAML-Konfiguration?</summary>
+              <dl><div><dt>ct_events</dt><dd>Event-Matching</dd></div><div><dt>song_placements</dt><dd>Platzierung in ChurchTools</dd></div><div><dt>ct_item_defaults</dt><dd>Standardwerte für Agenda-Songs</dd></div><div><dt>ct_song_defaults</dt><dd>Automatische Song-Erstellung und Songkategorie</dd></div></dl>
+              <p>Wenn Event-Typen unterschiedliche Platzierungen benötigen, lege dafür getrennte Sync-Profile mit passenden Event-Regeln an.</p>
+            </details>
+          </aside>
         </div>
-        <div class="wizard-actions"><button class="button button-secondary" type="button" @click="step = 2">Zurück</button><button class="button button-primary" type="submit" :disabled="loading">{{ loading ? 'Profil wird gespeichert …' : 'Speichern und Vorschau' }}</button></div>
+        <div class="wizard-actions"><button class="button button-secondary" type="button" @click="step = 2">Zurück</button><div class="wizard-action-options"><button class="button button-secondary" type="button" :disabled="loading" @click="editProfileDetails">Alle Einstellungen bearbeiten</button><button class="button button-primary" type="submit" :disabled="loading">{{ loading ? 'Profil wird gespeichert …' : 'Speichern und Vorschau' }}</button></div></div>
       </form>
 
       <section v-else class="wizard-content">
@@ -365,7 +389,7 @@ onBeforeUnmount(() => { if (previewPollTimer) window.clearTimeout(previewPollTim
           <ol v-if="previewActions.length" class="action-list"><li v-for="action in previewActions" :key="action.id"><span>{{ action.kind }}</span><strong>{{ String(action.payload.description || action.kind) }}</strong></li></ol>
           <p v-if="preview.status === 'failed' || preview.status === 'skipped'" class="danger-text">Das Profil bleibt deaktiviert. Öffne die Historie für Details oder gehe zurück und korrigiere die Konfiguration.</p><p v-else-if="!previewActions.length">Die Vorschau verändert keine Remotedaten. Details erscheinen nach der Planung in der Historie.</p>
         </div>
-        <div class="wizard-actions"><button class="button button-secondary" type="button" @click="step = 3">Zurück</button><button v-if="preview?.status === 'failed' || preview?.status === 'skipped' || !preview" class="button button-secondary" type="button" :disabled="loading" @click="loadPreview">Vorschau erneut starten</button><button class="button button-primary" type="button" :disabled="loading || !previewApproved" @click="finish">Profil aktivieren</button></div>
+        <div class="wizard-actions"><button class="button button-secondary" type="button" @click="step = 3">Zurück</button><div class="wizard-action-options"><RouterLink v-if="savedProfile" class="button button-secondary" :to="`/profiles/${savedProfile.id}`">Alle Einstellungen bearbeiten</RouterLink><button v-if="preview?.status === 'failed' || preview?.status === 'skipped' || !preview" class="button button-secondary" type="button" :disabled="loading" @click="loadPreview">Vorschau erneut starten</button><button class="button button-primary" type="button" :disabled="loading || !previewApproved" @click="finish">Profil aktivieren</button></div></div>
       </section>
     </section>
   </main>

@@ -728,6 +728,14 @@ def _assert_worker_boundary(worker_url: str, ids: FixtureIds) -> None:
             (ids.workspace_a, ids.workspace_b, ids.workspace_created),
         ).fetchone()[0] == 3
         assert connection.execute(
+            "SELECT id FROM workspaces WHERE id = %s FOR UPDATE",
+            (ids.workspace_a,),
+        ).fetchone()[0] == ids.workspace_a
+        assert connection.execute(
+            "UPDATE workspaces SET updated_at = CURRENT_TIMESTAMP WHERE id = %s",
+            (ids.workspace_a,),
+        ).rowcount == 0
+        assert connection.execute(
             "SELECT count(*) FROM memberships WHERE id IN (%s, %s, %s, %s)",
             (
                 ids.membership_a,

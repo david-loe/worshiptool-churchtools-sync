@@ -380,6 +380,16 @@ pre { overflow: auto; max-height: 360px; padding: 1rem; border-radius: 8px; colo
 .provider-card legend > span:last-child { display: flex; flex-direction: column; }
 .provider-card legend small { color: var(--ink-muted); font-size: .7rem; font-weight: 500; }
 .wizard-actions { display: flex; justify-content: space-between; gap: .8rem; margin-top: 1.5rem; }
+.wizard-action-options { display: flex; justify-content: flex-end; gap: .8rem; }
+.profile-configuration-note { padding: 1rem; border: 1px solid #b8dce2; border-radius: 12px; background: #eff9fa; font-size: .84rem; line-height: 1.5; }
+.profile-configuration-note > p { margin: .25rem 0 0; color: var(--ink-muted); }
+.profile-configuration-note details { margin-top: .75rem; }
+.profile-configuration-note summary { color: var(--teal); cursor: pointer; font-weight: 800; }
+.profile-configuration-note dl { display: grid; grid-template-columns: max-content 1fr; gap: .3rem .8rem; margin: .8rem 0; }
+.profile-configuration-note dl div { display: contents; }
+.profile-configuration-note dt { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; }
+.profile-configuration-note dd { margin: 0; }
+.profile-configuration-note details p { margin-bottom: 0; color: var(--ink-muted); }
 .preview-box { overflow: hidden; padding: 1rem; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); }
 .preview-summary { display: flex; justify-content: space-between; padding-bottom: .8rem; border-bottom: 1px solid var(--line); }
 .preview-summary span { color: var(--ink-muted); font-size: .75rem; }
@@ -427,6 +437,8 @@ pre { overflow: auto; max-height: 360px; padding: 1rem; border-radius: 8px; colo
   .profile-row { grid-template-columns: 22px 1fr auto; }
   .profile-last { display: none; }
   .connection-setup-grid { grid-template-columns: 1fr; }
+  .wizard-actions, .wizard-action-options { align-items: stretch; flex-direction: column; }
+  .wizard-actions .button { width: 100%; }
   .invite-form { grid-template-columns: 1fr; }
   .invite-form h3 { grid-column: 1; }
 }
