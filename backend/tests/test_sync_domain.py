@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timezone
 
 from app.sync.engine import SyncOrchestrator
+from app.sync.errors import AuthorizationError
 from app.sync.matching import match_events, match_song
 from app.sync.models import (
     ActionExecution,
@@ -437,6 +438,121 @@ def test_dry_run_persists_plan_but_never_applies_it() -> None:
     assert repository.plan is not None
     assert target.writes == []
     assert repository.executions == {}
+
+
+def _missing_agenda_fixture(*, dry_run: bool = False):
+    start = dt("2026-01-01T10:00:00Z")
+    source = FakeSourceProvider(
+        (SourceEvent("service", "Service", (start,), ("new",)),),
+        (SourceSong("new", "New Song", "Artist", "777"),),
+    )
+    repository = MemoryRunRepository(
+        RunSpecification(
+            "missing-agenda", "workspace", "wt", "ct", profile(), dry_run=dry_run
+        )
+    )
+    target = FakeTargetProvider(
+        (TargetEvent("event", "Event", start),),
+        (),
+        {},
+    )
+    orchestrator = SyncOrchestrator(
+        repository,
+        StaticProviderRegistry(source, target),
+        clock=type(
+            "Clock", (), {"now": lambda self: dt("2026-01-01T00:00:00Z")}
+        )(),
+        event_leases=MemoryEventLeaseManager(),
+    )
+    return orchestrator, repository, target
+
+
+def test_event_without_agenda_is_skipped_without_provider_writes() -> None:
+    orchestrator, repository, target = _missing_agenda_fixture()
+
+    status = asyncio.run(orchestrator.execute("missing-agenda"))
+
+    assert status is RunStatus.SKIPPED
+    assert repository.error is None
+    assert repository.plan is not None
+    assert repository.plan.preparation_actions == ()
+    event = repository.plan.events[0]
+    assert event.status is EventPlanStatus.SKIPPED
+    assert event.actions == ()
+    assert event.issues[0].code == "agenda_missing"
+    assert event.issues[0].severity is IssueSeverity.WARNING
+    assert target.writes == []
+    assert repository.executions == {}
+
+
+def test_dry_run_without_agenda_is_skipped_without_provider_writes() -> None:
+    orchestrator, repository, target = _missing_agenda_fixture(dry_run=True)
+
+    status = asyncio.run(orchestrator.execute("missing-agenda"))
+
+    assert status is RunStatus.SKIPPED
+    assert repository.plan is not None
+    assert repository.plan.events[0].status is EventPlanStatus.SKIPPED
+    assert repository.plan.preparation_actions == ()
+    assert target.writes == []
+    assert repository.executions == {}
+
+
+def test_missing_agenda_does_not_prevent_another_event_from_succeeding() -> None:
+    starts = (dt("2026-01-01T10:00:00Z"), dt("2026-01-01T11:00:00Z"))
+    source = FakeSourceProvider(
+        tuple(
+            SourceEvent(f"source-{index}", "Service", (start,), ("new",))
+            for index, start in enumerate(starts)
+        ),
+        (SourceSong("new", "New Song", "Artist", "777"),),
+    )
+    repository = MemoryRunRepository(
+        RunSpecification("mixed-agendas", "workspace", "wt", "ct", profile())
+    )
+    target = FakeTargetProvider(
+        tuple(
+            TargetEvent(event_id, "Event", start)
+            for event_id, start in zip(("missing", "ready"), starts, strict=True)
+        ),
+        (),
+        {"ready": Agenda("ready", (AgendaItem("header", 0, "header", "Lobpreis"),))},
+    )
+    orchestrator = SyncOrchestrator(
+        repository,
+        StaticProviderRegistry(source, target),
+        clock=type(
+            "Clock", (), {"now": lambda self: dt("2026-01-01T00:00:00Z")}
+        )(),
+        event_leases=MemoryEventLeaseManager(),
+    )
+
+    status = asyncio.run(orchestrator.execute("mixed-agendas"))
+
+    assert status is RunStatus.SUCCEEDED
+    assert repository.plan is not None
+    assert [event.status for event in repository.plan.events] == [
+        EventPlanStatus.SKIPPED,
+        EventPlanStatus.READY,
+    ]
+    assert target.agendas["ready"].items[1].song_id is not None
+    assert "missing" not in target.agendas
+
+
+def test_non_not_found_agenda_error_still_fails_the_run() -> None:
+    orchestrator, repository, target = _missing_agenda_fixture()
+
+    async def forbidden_agenda(event_id: str) -> Agenda:
+        raise AuthorizationError(event_id=event_id)
+
+    target.get_agenda = forbidden_agenda  # type: ignore[method-assign]
+
+    status = asyncio.run(orchestrator.execute("missing-agenda"))
+
+    assert status is RunStatus.FAILED
+    assert repository.plan is None
+    assert repository.error is not None
+    assert repository.error["kind"] == "authorization"
 
 
 def test_planning_renews_run_lease_while_provider_reads_are_in_flight() -> None:

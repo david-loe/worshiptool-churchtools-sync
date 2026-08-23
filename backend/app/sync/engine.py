@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Sequence
 
-from .errors import ConcurrentModificationError, SyncError
+from .errors import ConcurrentModificationError, NotFoundError, SyncError
 from .matching import normalize_ccli, normalize_text
 from .models import (
     ActionExecution,
@@ -127,7 +127,15 @@ class SyncOrchestrator:
                 agendas: dict[str, Agenda] = {}
                 ownerships: dict[str, Sequence[Ownership]] = {}
                 for target_event_id in target_ids:
-                    agendas[target_event_id] = await target.get_agenda(target_event_id)
+                    try:
+                        agendas[target_event_id] = await target.get_agenda(
+                            target_event_id
+                        )
+                    except NotFoundError:
+                        # ChurchTools returns 404 for otherwise valid events
+                        # that do not have an agenda.  Leaving the agenda out
+                        # lets the planner record an explicit event-level skip.
+                        continue
                     ownerships[target_event_id] = await self.repository.ownerships(
                         specification.profile.id, target_event_id
                     )

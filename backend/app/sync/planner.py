@@ -284,8 +284,14 @@ class SyncPlanner:
                 id=event_plan_id,
                 source_event_id=match.source.id,
                 target_event_id=match.target.id,
-                status=EventPlanStatus.FAILED,
-                issues=(PlanIssue("agenda_missing", "Für das ChurchTools-Event wurde keine Agenda gefunden"),),
+                status=EventPlanStatus.SKIPPED,
+                issues=(
+                    PlanIssue(
+                        "agenda_missing",
+                        "Für das ChurchTools-Event wurde keine Agenda gefunden",
+                        severity=IssueSeverity.WARNING,
+                    ),
+                ),
             )
         if not profile.placements:
             return EventPlan(
