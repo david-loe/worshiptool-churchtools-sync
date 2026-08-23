@@ -35,12 +35,6 @@ WT_SYNC_POSTGRES_IMAGE=ghcr.io/david-loe/worshiptools-churchtools-sync-postgres:
 docker compose -f compose.yaml -f deploy.yaml up -d --wait
 ```
 
-`protainer.yaml` ist eine eigenständige Portainer-Definition ohne Build-Kontexte
-oder relative Bind-Mounts. Sie kann im Webeditor eingefügt oder als einzelne
-Datei hochgeladen werden; die Werte aus `portainer.env` werden separat in
-Portainer importiert. Der PostgreSQL-Init-Hook ist im veröffentlichten
-PostgreSQL-Image enthalten.
-
 Die Standard-Compose-Konfiguration reicht Secrets direkt aus der git-ignorierten
 `.env` an die jeweils berechtigten Container weiter. Erforderlich sind vier
 verschiedene PostgreSQL-Passwörter und die dazu passenden Owner-, API-, Worker-
