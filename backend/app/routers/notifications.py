@@ -9,7 +9,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.sql.elements import ColumnElement
 
 from ..dependencies import CsrfDep, DbDep, SettingsDep, WorkspaceAccessDep
-from ..models import Membership, Notification, NotificationPreference, PushSubscription
+from ..models import Notification, NotificationPreference, PushSubscription, User
 from ..problems import ProblemException
 from ..schemas import (
     NotificationList,
@@ -192,17 +192,20 @@ def register_push_subscription(
             "push_endpoint_not_allowed",
         ) from exc
     endpoint_hash = hashlib.sha256(endpoint.encode("utf-8")).hexdigest()
-    membership_id = db.scalar(
-        select(Membership.id)
-        .where(
-            Membership.workspace_id == access.workspace.id,
-            Membership.user_id == access.user.id,
-        )
-        .with_for_update()
+    # Serialize quota checks across all sessions of this user. Locking the
+    # membership itself is not safe here: PostgreSQL applies its UPDATE RLS
+    # policy to SELECT FOR UPDATE, hiding viewer/operator memberships and the
+    # sole owner's membership even though WorkspaceAccess already authorized
+    # the request.
+    user_id = db.scalar(
+        select(User.id).where(User.id == access.user.id).with_for_update()
     )
-    if membership_id is None:
+    if user_id is None:
         raise ProblemException(
-            404, "Nicht gefunden", "Workspace nicht gefunden.", "not_found"
+            401,
+            "Nicht angemeldet",
+            "Für diese Anfrage ist eine Anmeldung erforderlich.",
+            "authentication_required",
         )
     subscription = db.scalar(
         select(PushSubscription).where(

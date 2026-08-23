@@ -24,8 +24,14 @@ from app.models import Membership, NotificationOutbox, User, Workspace, Workspac
 from app.outbox import enqueue_email
 from app.problems import ProblemException
 from app.routers.auth import register, request_recovery
+from app.routers.notifications import register_push_subscription
 from app.routers.workspaces import update_member_role
-from app.schemas import MemberRoleUpdate, RecoveryRequest, RegisterRequest
+from app.schemas import (
+    MemberRoleUpdate,
+    PushSubscriptionCreate,
+    RecoveryRequest,
+    RegisterRequest,
+)
 
 
 @dataclass(frozen=True)
@@ -670,6 +676,43 @@ def _assert_registration(api_url: str, ids: FixtureIds) -> None:
         engine.dispose()
 
 
+def _assert_push_registration(api_url: str, ids: FixtureIds) -> None:
+    settings = _test_settings(api_url)
+    cases = (
+        (ids.user_a, ids.workspace_a, WorkspaceRole.VIEWER, "viewer"),
+        (ids.user_b, ids.workspace_b, WorkspaceRole.OWNER, "sole-owner"),
+    )
+    engine = create_engine(settings.database_url)
+    try:
+        for user_id, workspace_id, role, endpoint_token in cases:
+            with Session(engine, expire_on_commit=False, autoflush=False) as db:
+                set_request_user_context(db, user_id)
+                actor = db.get(User, user_id)
+                workspace = db.get(Workspace, workspace_id)
+                assert actor is not None and workspace is not None
+
+                subscription = register_push_subscription(
+                    PushSubscriptionCreate(
+                        endpoint=(
+                            "https://fcm.googleapis.com/fcm/send/"
+                            f"rls-{endpoint_token}-{workspace_id.hex}"
+                        ),
+                        p256dh="postgres-role-test-public-key",
+                        auth="postgres-role-test-auth-key",
+                        device_name=f"RLS {endpoint_token}",
+                    ),
+                    WorkspaceAccess(workspace, actor, role),
+                    settings,
+                    db,
+                    None,
+                )
+
+                assert subscription.workspace_id == workspace_id
+                assert subscription.user_id == user_id
+    finally:
+        engine.dispose()
+
+
 def _assert_membershipless_recovery(api_url: str, ids: FixtureIds) -> None:
     settings = _test_settings(api_url)
     email = f"role-admin-{ids.workspace_a.hex[:12]}@example.org"
@@ -944,6 +987,7 @@ def main() -> None:
         _assert_role_attributes(owner_url)
         _assert_api_boundary(api_url, ids)
         _assert_registration(api_url, ids)
+        _assert_push_registration(api_url, ids)
         _assert_membershipless_recovery(api_url, ids)
         _assert_invitation_join(owner_url, api_url, ids)
         _assert_worker_boundary(worker_url, ids)
