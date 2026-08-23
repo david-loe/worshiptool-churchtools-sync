@@ -184,7 +184,7 @@ def test_fresh_sqlite_migration_installs_and_reverses_tenant_foreign_keys(
         _assert_seed_preserved(engine, seeded)
         with engine.connect() as connection:
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-                "20260823_0012"
+                "20260823_0013"
             )
     finally:
         engine.dispose()
