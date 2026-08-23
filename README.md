@@ -16,6 +16,24 @@ install -d -m 700 secrets
 docker compose up --build
 ```
 
+Für ein Deployment mit den bereits veröffentlichten Images wird das
+Image-Override zusätzlich eingebunden. Es baut auf dem Zielsystem keine Images:
+
+```bash
+docker compose -f compose.yaml -f deploy.yaml pull
+docker compose -f compose.yaml -f deploy.yaml up -d --wait
+```
+
+Standardmäßig werden die `main`-Images aus der GitHub Container Registry
+verwendet. Eine konkrete Version oder eine andere Registry kann explizit
+gewählt werden:
+
+```bash
+WT_SYNC_BACKEND_IMAGE=ghcr.io/david-loe/worshiptools-churchtools-sync-backend:1.2.3 \
+WT_SYNC_FRONTEND_IMAGE=ghcr.io/david-loe/worshiptools-churchtools-sync-frontend:1.2.3 \
+docker compose -f compose.yaml -f deploy.yaml up -d --wait
+```
+
 `.env` enthält nur Konfiguration und Pfade. Die referenzierten Dateien
 unter `secrets/` werden als Compose-Secrets eingebunden und sind per `.gitignore`
 ausgeschlossen. Erforderlich sind vier verschiedene PostgreSQL-Passwörter und
