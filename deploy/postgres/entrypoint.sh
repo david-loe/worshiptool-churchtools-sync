@@ -1,11 +1,10 @@
 #!/bin/sh
 set -eu
 
-# Docker Compose implements file-backed secrets as bind mounts. Read the three
-# application-role passwords while the official image still runs as root; its
-# entrypoint drops to the postgres user before executing initdb hooks and would
-# otherwise lose Docker's supplementary secret-reader group. The owner password
-# remains handled by the official POSTGRES_PASSWORD_FILE implementation.
+# When file-backed secrets are used, read the three application-role passwords
+# while the official image still runs as root. Its entrypoint drops to the
+# postgres user before executing initdb hooks. The owner password remains
+# handled by the official POSTGRES_PASSWORD_FILE implementation.
 load_role_password() {
   target_name=$1
   file_name=$2

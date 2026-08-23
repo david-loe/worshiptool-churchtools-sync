@@ -11,8 +11,8 @@ und SMTP-Zugang für Registrierung, Recovery und Benachrichtigungen.
 
 ```bash
 cp .env.example .env
-install -d -m 700 secrets
-# Nicht-sensitive Werte in .env anpassen und Secret-Dateien befüllen.
+# Konfiguration und alle Secret-Platzhalter in .env ersetzen.
+chmod 600 .env
 docker compose up --build
 ```
 
@@ -34,21 +34,37 @@ WT_SYNC_FRONTEND_IMAGE=ghcr.io/david-loe/worshiptools-churchtools-sync-frontend:
 docker compose -f compose.yaml -f deploy.yaml up -d --wait
 ```
 
-`.env` enthält nur Konfiguration und Pfade. Die referenzierten Dateien
-unter `secrets/` werden als Compose-Secrets eingebunden und sind per `.gitignore`
-ausgeschlossen. Erforderlich sind vier verschiedene PostgreSQL-Passwörter und
-die dazu passenden Owner-, API-, Worker- und Admin-DSNs, außerdem Redis-URL,
-Application-Secret, Encryption-Secret und eine JSON-Datei mit normalerweise
-`{}` für alte Encryption-Keys. SMTP-, VAPID-, Telegram- und Bootstrap-Secrets
-liegen ebenfalls in eigenen Dateien; ungenutzte optionale Dateien dürfen leer
-sein. Dateien mit Passwörtern nie per Kommandozeilenargument oder Shell-History
-befüllen, sondern aus dem Secret-Manager oder einem geschützten Editor schreiben.
-Die vier Passwortdateien enthalten jeweils den unveränderten Rohwert. In den
-vier DSN-Dateien muss derselbe Wert dagegen URL-percent-encoded sein, sobald er
-reservierte URI-Zeichen enthält.
-Alle Dateien gehören einer dedizierten Host-Gruppe, deren numerische ID als
-`SECRETS_GID` konfiguriert ist, und erhalten Modus `0640`; nur diese Gruppe wird
-den unprivilegierten Backend- und PostgreSQL-Prozessen zusätzlich zugewiesen.
+Die Standard-Compose-Konfiguration reicht Secrets direkt aus der git-ignorierten
+`.env` an die jeweils berechtigten Container weiter. Erforderlich sind vier
+verschiedene PostgreSQL-Passwörter und die dazu passenden Owner-, API-, Worker-
+und Admin-DSNs, außerdem Redis-URL, Application-Secret und Encryption-Secret.
+Das JSON-Objekt für alte Encryption-Keys ist normalerweise `{}`; ungenutzte
+SMTP-, VAPID- und Telegram-Werte dürfen leer sein. Passwörter nie als
+Kommandozeilenargument eingeben, `.env` auf Modus `0600` beschränken und Werte
+möglichst aus einem geschützten Secret-Manager bereitstellen. Secret-Werte in
+Container-Umgebungen sind für Nutzer mit Docker-Daemon-Zugriff per Inspect
+einsehbar.
+
+Alle Secret-Einstellungen unterstützen alternativ eine `_FILE`-Variable. Dazu
+muss ein eigenes Compose-Override die Datei in den Container mounten und dort
+zum Beispiel `WT_SYNC_APPLICATION_SECRET_FILE=/run/secrets/application_secret`
+setzen. Direktwert und `_FILE`-Variante dürfen nie gleichzeitig gesetzt sein.
+Die vollständige Zuordnung steht kommentiert in `.env.example` und im
+[Sicherheitsmodell](docs/security.md). Für API und Worker heißt die
+containerinterne Alternative jeweils `WT_SYNC_DATABASE_URL_FILE`; das Override
+mountet dort entsprechend die API- oder Worker-DSN. PostgreSQL unterstützt
+`POSTGRES_PASSWORD_FILE`, `POSTGRES_API_PASSWORD_FILE`,
+`POSTGRES_WORKER_PASSWORD_FILE` und `POSTGRES_ADMIN_PASSWORD_FILE`.
+
+Die vier direkten PostgreSQL-Passwörter enthalten den unveränderten Rohwert. Im
+Passwortanteil der korrespondierenden DSNs muss derselbe Wert URL-percent-encoded
+sein, sobald er reservierte URI-Zeichen enthält.
+
+Bei der Umstellung einer bestehenden Installation müssen die bisherigen
+Dateiinhalte unverändert in die entsprechenden Direktvariablen übernommen
+werden. Insbesondere dürfen für ein vorhandenes PostgreSQL-Volume nicht beiläufig
+neue Passwörter erzeugt werden; neue Werte erfordern den unten beschriebenen
+Rotationsablauf.
 
 Die PWA wird standardmäßig nur auf `127.0.0.1:8080` bereitgestellt. Der
 vorgeschaltete Host-Reverse-Proxy terminiert TLS und leitet auf diesen Port
@@ -115,9 +131,9 @@ Lease-Zustand und ersetzt kein Backup. Vor jedem Upgrade läuft zuerst
 ### PostgreSQL-Zugangsdaten rotieren oder Rollen nachrüsten
 
 Der PostgreSQL-Init-Hook läuft automatisch nur bei einem leeren Datenvolume.
-Nach Änderung der vier Passwortdateien müssen auch die vier DSN-Dateien
+Nach Änderung der vier Passwortvariablen müssen auch die vier DSN-Variablen
 denselben neuen Stand enthalten. Anschließend werden die Backend-Verbindungen
-angehalten, PostgreSQL mit den aktuellen Secret-Mounts neu erstellt und der
+angehalten, PostgreSQL mit den aktuellen Umgebungswerten neu erstellt und der
 idempotente Hook explizit erneut ausgeführt:
 
 ```bash
@@ -129,20 +145,20 @@ docker compose up -d --force-recreate api scheduler worker notification-worker
 ```
 
 Der Hook aktualisiert Owner, API, Worker und Admin per `ALTER ROLE`, liest alle
-Passwörter ausschließlich aus den gemounteten Dateien und schreibt sie weder in
-Argumentlisten noch Logs. Das anschließende Recreate verwirft offene
+Passwörter aus der Container-Umgebung und schreibt sie weder in Argumentlisten
+noch Logs. Das anschließende Recreate verwirft offene
 Connection-Pools mit alten Zugangsdaten. Derselbe Ablauf ist vor dem ersten
 Upgrade auf Revision `0008` bei einem bestehenden Datenvolume erforderlich.
-Auch bei jeder Rotation gilt: Passwortdateien enthalten den Rohwert; der
-Passwortanteil der korrespondierenden DSN-Dateien ist URL-percent-encoded.
+Auch bei jeder Rotation gilt: Passwortvariablen enthalten den Rohwert; der
+Passwortanteil der korrespondierenden DSN-Variablen ist URL-percent-encoded.
 
 Für eine Rotation des AES-GCM-Masterschlüssels:
 
 1. Datenbank sichern und API, Scheduler sowie beide Worker stoppen.
-2. Den alten Schlüssel als JSON unter seiner Versionsnummer in die von
-   `WT_SYNC_ENCRYPTION_PREVIOUS_SECRETS_FILE` referenzierte Datei eintragen,
-   `WT_SYNC_ENCRYPTION_KEY_VERSION` erhöhen und die von
-   `WT_SYNC_ENCRYPTION_SECRET_FILE` referenzierte Datei ersetzen.
+2. Den alten Schlüssel als JSON unter seiner Versionsnummer in
+   `WT_SYNC_ENCRYPTION_PREVIOUS_SECRETS` eintragen,
+   `WT_SYNC_ENCRYPTION_KEY_VERSION` erhöhen und
+   `WT_SYNC_ENCRYPTION_SECRET` ersetzen.
 3. Einmalig den Rotationslauf ausführen:
 
    ```bash

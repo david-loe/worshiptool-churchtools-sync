@@ -28,8 +28,9 @@
   intentionally logged.
 - Run history, notifications and audit events are removed after 90 days.
 
-Sensitive runtime settings can be supplied as UTF-8 files instead of direct
-environment values. The supported file variables are
+Compose supplies sensitive runtime settings as direct environment values by
+default. They can alternatively be supplied as UTF-8 files. The supported file
+variables are
 `WT_SYNC_DATABASE_URL_FILE`, `WT_SYNC_DATABASE_ADMIN_URL_FILE`,
 `WT_SYNC_DATABASE_OWNER_URL_FILE`,
 `WT_SYNC_REDIS_URL_FILE`, `WT_SYNC_APPLICATION_SECRET_FILE`,
@@ -44,12 +45,16 @@ Never configure a direct value and its `_FILE` counterpart together; startup
 fails in that case. Secret files are limited to 64 KiB, reject binary/NUL data
 and have exactly one final newline removed (other whitespace is preserved).
 File-read failures identify only the setting, never the configured path or
-secret contents. Compose mounts only the API DSN plus the restricted admin DSN
-into the API, only the worker DSN into scheduler/workers, and only the owner DSN
-into migration/bootstrap tools. Raw PostgreSQL passwords are visible only to
-PostgreSQL's role-init hook. In production, enabled e-mail verification also
-requires a configured SMTP host so registration cannot create accounts that can
-never be verified.
+secret contents. The standard Compose configuration injects only the API DSN
+plus the restricted admin DSN into the API, only the worker DSN into
+scheduler/workers, and only the owner DSN into migration/bootstrap tools. A
+custom file-backed override must preserve that separation. PostgreSQL also
+accepts `POSTGRES_PASSWORD_FILE`, `POSTGRES_API_PASSWORD_FILE`,
+`POSTGRES_WORKER_PASSWORD_FILE` and `POSTGRES_ADMIN_PASSWORD_FILE` instead of
+their direct counterparts. Raw PostgreSQL passwords are visible only to
+PostgreSQL and its role-init hook. In production, enabled e-mail verification
+also requires a configured SMTP host so registration cannot create accounts
+that can never be verified.
 
 API update privileges are column-scoped: tenant routes may rename/archive a
 workspace but cannot alter platform-managed quotas, membership identity columns
@@ -63,10 +68,11 @@ each owner/API/worker/admin DSN must be URL-percent-encoded when it contains a
 reserved URI character; otherwise parsing the DSN can fail independently of
 the database role rotation.
 
-Changing a Compose secret file does not alter an existing PostgreSQL role or
-invalidate an open connection. The idempotent init hook must be run explicitly
-after updating all password and matching DSN files, followed by recreating every
-backend service; the exact no-password-in-argv procedure is in the README.
+Changing a PostgreSQL password environment value or file does not alter an
+existing role or invalidate an open connection. The idempotent init hook must be
+run explicitly after updating all passwords and matching DSNs, followed by
+recreating every backend service; the exact no-password-in-argv procedure is in
+the README.
 
 ## Network and container boundary
 

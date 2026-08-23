@@ -171,28 +171,22 @@ jobs:
   compose-and-images:
     runs-on: ubuntu-latest
     needs: [backend, frontend, postgres-role-boundary]
+    env:
+      POSTGRES_OWNER_PASSWORD: owner-ci-password
+      POSTGRES_API_PASSWORD: api-ci-password
+      POSTGRES_WORKER_PASSWORD: worker-ci-password
+      POSTGRES_ADMIN_PASSWORD: admin-ci-password
+      WT_SYNC_DATABASE_OWNER_URL: postgresql+psycopg://worshipsync_owner:owner-ci-password@postgres:5432/worshipsync
+      WT_SYNC_DATABASE_API_URL: postgresql+psycopg://worshipsync_api:api-ci-password@postgres:5432/worshipsync
+      WT_SYNC_DATABASE_WORKER_URL: postgresql+psycopg://worshipsync_worker:worker-ci-password@postgres:5432/worshipsync
+      WT_SYNC_DATABASE_ADMIN_URL: postgresql+psycopg://worshipsync_admin:admin-ci-password@postgres:5432/worshipsync
+      WT_SYNC_REDIS_URL: redis://redis:6379/0
+      WT_SYNC_APPLICATION_SECRET: ci-application-secret-value-1234567890
+      WT_SYNC_ENCRYPTION_SECRET: ci-encryption-secret-value-09876543210
+      WT_SYNC_ENCRYPTION_PREVIOUS_SECRETS: "{}"
+      WT_SYNC_BOOTSTRAP_ADMIN_PASSWORD: bootstrap-test-password-value-123456
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Create CI-only Compose secret files
-        run: |
-          mkdir -p secrets
-          printf '%s\n' owner-ci-password >secrets/postgres-owner-password
-          printf '%s\n' api-ci-password >secrets/postgres-api-password
-          printf '%s\n' worker-ci-password >secrets/postgres-worker-password
-          printf '%s\n' admin-ci-password >secrets/postgres-admin-password
-          printf '%s\n' 'postgresql+psycopg://worshipsync_owner:owner-ci-password@postgres:5432/worshipsync' >secrets/database-owner-url
-          printf '%s\n' 'postgresql+psycopg://worshipsync_api:api-ci-password@postgres:5432/worshipsync' >secrets/database-api-url
-          printf '%s\n' 'postgresql+psycopg://worshipsync_worker:worker-ci-password@postgres:5432/worshipsync' >secrets/database-worker-url
-          printf '%s\n' 'postgresql+psycopg://worshipsync_admin:admin-ci-password@postgres:5432/worshipsync' >secrets/database-admin-url
-          printf '%s\n' 'redis://redis:6379/0' >secrets/redis-url
-          printf '%s\n' ci-application-secret-value-1234567890 >secrets/application-secret
-          printf '%s\n' ci-encryption-secret-value-09876543210 >secrets/encryption-secret
-          printf '%s\n' '{}' >secrets/encryption-previous-secrets.json
-          printf '%s\n' smtp-ci-password >secrets/smtp-password
-          printf '\n' >secrets/vapid-private-key
-          printf '\n' >secrets/telegram-bot-token
-          printf '%s\n' bootstrap-test-password-value-123456 >secrets/bootstrap-admin-password
-          chmod 640 secrets/*
       - name: Validate Compose
         run: |
           docker compose --env-file .env.example config --quiet
@@ -217,7 +211,6 @@ jobs:
         run: sh frontend/scripts/gateway-smoke.sh worship-sync-frontend:ci
       - name: Boot and probe the complete production stack
         run: |
-          export SECRETS_GID="$(id -g)"
           project=worship-sync-platform-ci
           compose="docker compose -p $project --env-file .env.example -f compose.yaml -f deploy/compose.ci.yaml"
           cleanup() {

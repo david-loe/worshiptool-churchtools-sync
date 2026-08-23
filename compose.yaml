@@ -2,11 +2,11 @@ name: worship-sync
 
 x-runtime-environment: &runtime-environment
   WT_SYNC_ENVIRONMENT: ${WT_SYNC_ENVIRONMENT:-production}
-  WT_SYNC_REDIS_URL_FILE: /run/secrets/redis_url
-  WT_SYNC_APPLICATION_SECRET_FILE: /run/secrets/application_secret
-  WT_SYNC_ENCRYPTION_SECRET_FILE: /run/secrets/encryption_secret
+  WT_SYNC_REDIS_URL: ${WT_SYNC_REDIS_URL}
+  WT_SYNC_APPLICATION_SECRET: ${WT_SYNC_APPLICATION_SECRET}
+  WT_SYNC_ENCRYPTION_SECRET: ${WT_SYNC_ENCRYPTION_SECRET}
   WT_SYNC_ENCRYPTION_KEY_VERSION: ${WT_SYNC_ENCRYPTION_KEY_VERSION:-1}
-  WT_SYNC_ENCRYPTION_PREVIOUS_SECRETS_FILE: /run/secrets/encryption_previous_secrets
+  WT_SYNC_ENCRYPTION_PREVIOUS_SECRETS: ${WT_SYNC_ENCRYPTION_PREVIOUS_SECRETS:-{}}
   WT_SYNC_API_PREFIX: ${WT_SYNC_API_PREFIX:-/api/v1}
   WT_SYNC_PUBLIC_BASE_URL: ${WT_SYNC_PUBLIC_BASE_URL}
   WT_SYNC_CORS_ORIGINS: ${WT_SYNC_CORS_ORIGINS:-[]}
@@ -38,10 +38,6 @@ x-backend: &backend
     - no-new-privileges:true
   cap_drop:
     - ALL
-  # Compose file-backed secrets retain host ownership. Add only the dedicated
-  # host secret-reader group; the process still runs as the image's uid 10001.
-  group_add:
-    - ${SECRETS_GID:-1000}
   depends_on:
     postgres:
       condition: service_healthy
@@ -59,15 +55,10 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_owner_password
-      POSTGRES_API_PASSWORD_FILE: /run/secrets/postgres_api_password
-      POSTGRES_WORKER_PASSWORD_FILE: /run/secrets/postgres_worker_password
-      POSTGRES_ADMIN_PASSWORD_FILE: /run/secrets/postgres_admin_password
-    secrets:
-      - postgres_owner_password
-      - postgres_api_password
-      - postgres_worker_password
-      - postgres_admin_password
+      POSTGRES_PASSWORD: ${POSTGRES_OWNER_PASSWORD}
+      POSTGRES_API_PASSWORD: ${POSTGRES_API_PASSWORD}
+      POSTGRES_WORKER_PASSWORD: ${POSTGRES_WORKER_PASSWORD}
+      POSTGRES_ADMIN_PASSWORD: ${POSTGRES_ADMIN_PASSWORD}
     volumes:
       # PostgreSQL 18 moved PGDATA below this version-neutral mount point.
       - postgres-data:/var/lib/postgresql
@@ -80,8 +71,6 @@ services:
       retries: 20
     security_opt:
       - no-new-privileges:true
-    group_add:
-      - ${SECRETS_GID:-1000}
     networks:
       - internal
 
@@ -106,30 +95,16 @@ services:
     restart: "no"
     environment:
       <<: *runtime-environment
-      WT_SYNC_DATABASE_URL_FILE: /run/secrets/database_api_url
-      WT_SYNC_DATABASE_OWNER_URL_FILE: /run/secrets/database_owner_url
-    secrets:
-      - database_api_url
-      - database_owner_url
-      - redis_url
-      - application_secret
-      - encryption_secret
-      - encryption_previous_secrets
+      WT_SYNC_DATABASE_URL: ${WT_SYNC_DATABASE_API_URL}
+      WT_SYNC_DATABASE_OWNER_URL: ${WT_SYNC_DATABASE_OWNER_URL}
     command: ["alembic", "upgrade", "head"]
 
   api:
     <<: *backend
     environment:
       <<: *runtime-environment
-      WT_SYNC_DATABASE_URL_FILE: /run/secrets/database_api_url
-      WT_SYNC_DATABASE_ADMIN_URL_FILE: /run/secrets/database_admin_url
-    secrets:
-      - database_api_url
-      - database_admin_url
-      - redis_url
-      - application_secret
-      - encryption_secret
-      - encryption_previous_secrets
+      WT_SYNC_DATABASE_URL: ${WT_SYNC_DATABASE_API_URL}
+      WT_SYNC_DATABASE_ADMIN_URL: ${WT_SYNC_DATABASE_ADMIN_URL}
     # Only the non-public Caddy service can reach this port from the web
     # network, so forwarded headers may be trusted from the direct peer.
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*", "--no-access-log"]
@@ -153,13 +128,7 @@ services:
     <<: *backend
     environment:
       <<: *runtime-environment
-      WT_SYNC_DATABASE_URL_FILE: /run/secrets/database_worker_url
-    secrets:
-      - database_worker_url
-      - redis_url
-      - application_secret
-      - encryption_secret
-      - encryption_previous_secrets
+      WT_SYNC_DATABASE_URL: ${WT_SYNC_DATABASE_WORKER_URL}
     command: ["python", "-m", "app.scheduler"]
     depends_on:
       postgres:
@@ -179,13 +148,7 @@ services:
     <<: *backend
     environment:
       <<: *runtime-environment
-      WT_SYNC_DATABASE_URL_FILE: /run/secrets/database_worker_url
-    secrets:
-      - database_worker_url
-      - redis_url
-      - application_secret
-      - encryption_secret
-      - encryption_previous_secrets
+      WT_SYNC_DATABASE_URL: ${WT_SYNC_DATABASE_WORKER_URL}
     command: ["dramatiq", "app.worker", "--processes", "1", "--threads", "2", "--queues", "sync", "probes"]
     stop_grace_period: 45s
     depends_on:
@@ -209,32 +172,23 @@ services:
     <<: *backend
     environment:
       <<: *runtime-environment
-      WT_SYNC_DATABASE_URL_FILE: /run/secrets/database_worker_url
+      WT_SYNC_DATABASE_URL: ${WT_SYNC_DATABASE_WORKER_URL}
       WT_SYNC_SMTP_PORT: ${WT_SYNC_SMTP_PORT:-587}
       WT_SYNC_SMTP_USERNAME: ${WT_SYNC_SMTP_USERNAME:-}
-      WT_SYNC_SMTP_PASSWORD_FILE: /run/secrets/smtp_password
+      WT_SYNC_SMTP_PASSWORD: ${WT_SYNC_SMTP_PASSWORD:-}
       WT_SYNC_SMTP_FROM: ${WT_SYNC_SMTP_FROM:-Worship Sync <noreply@localhost>}
       WT_SYNC_SMTP_STARTTLS: ${WT_SYNC_SMTP_STARTTLS:-true}
       WT_SYNC_SMTP_TIMEOUT_SECONDS: ${WT_SYNC_SMTP_TIMEOUT_SECONDS:-15}
-      WT_SYNC_VAPID_PRIVATE_KEY_FILE: /run/secrets/vapid_private_key
+      WT_SYNC_VAPID_PRIVATE_KEY: ${WT_SYNC_VAPID_PRIVATE_KEY:-}
       WT_SYNC_VAPID_SUBJECT: ${WT_SYNC_VAPID_SUBJECT:-}
       WT_SYNC_TELEGRAM_ENABLED: ${WT_SYNC_TELEGRAM_ENABLED:-false}
-      WT_SYNC_TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram_bot_token
+      WT_SYNC_TELEGRAM_BOT_TOKEN: ${WT_SYNC_TELEGRAM_BOT_TOKEN:-}
       WT_SYNC_TELEGRAM_CHAT_ID: ${WT_SYNC_TELEGRAM_CHAT_ID:-}
       WT_SYNC_TELEGRAM_WORKSPACE_ID: ${WT_SYNC_TELEGRAM_WORKSPACE_ID:-}
       WT_SYNC_OUTBOX_BATCH_SIZE: ${WT_SYNC_OUTBOX_BATCH_SIZE:-10}
       WT_SYNC_OUTBOX_MAX_ATTEMPTS: ${WT_SYNC_OUTBOX_MAX_ATTEMPTS:-8}
       WT_SYNC_OUTBOX_LEASE_SECONDS: ${WT_SYNC_OUTBOX_LEASE_SECONDS:-300}
       WT_SYNC_RETENTION_DAYS: ${WT_SYNC_RETENTION_DAYS:-90}
-    secrets:
-      - database_worker_url
-      - redis_url
-      - application_secret
-      - encryption_secret
-      - encryption_previous_secrets
-      - smtp_password
-      - vapid_private_key
-      - telegram_bot_token
     command: ["dramatiq", "app.worker", "--processes", "1", "--threads", "2", "--queues", "notifications"]
     stop_grace_period: 45s
     depends_on:
@@ -260,16 +214,9 @@ services:
     restart: "no"
     environment:
       <<: *runtime-environment
-      WT_SYNC_DATABASE_URL_FILE: /run/secrets/database_owner_url
+      WT_SYNC_DATABASE_URL: ${WT_SYNC_DATABASE_OWNER_URL}
       WT_SYNC_BOOTSTRAP_ADMIN_EMAIL: ${WT_SYNC_BOOTSTRAP_ADMIN_EMAIL:-}
-      WT_SYNC_BOOTSTRAP_ADMIN_PASSWORD_FILE: /run/secrets/bootstrap_admin_password
-    secrets:
-      - database_owner_url
-      - redis_url
-      - application_secret
-      - encryption_secret
-      - encryption_previous_secrets
-      - bootstrap_admin_password
+      WT_SYNC_BOOTSTRAP_ADMIN_PASSWORD: ${WT_SYNC_BOOTSTRAP_ADMIN_PASSWORD:-}
     command: ["python", "-m", "app.bootstrap_admin"]
     depends_on:
       postgres:
@@ -324,37 +271,3 @@ networks:
 volumes:
   postgres-data:
   redis-data:
-
-secrets:
-  postgres_owner_password:
-    file: ${POSTGRES_OWNER_PASSWORD_FILE}
-  postgres_api_password:
-    file: ${POSTGRES_API_PASSWORD_FILE}
-  postgres_worker_password:
-    file: ${POSTGRES_WORKER_PASSWORD_FILE}
-  postgres_admin_password:
-    file: ${POSTGRES_ADMIN_PASSWORD_FILE}
-  database_owner_url:
-    file: ${WT_SYNC_DATABASE_OWNER_URL_FILE}
-  database_api_url:
-    file: ${WT_SYNC_DATABASE_API_URL_FILE}
-  database_worker_url:
-    file: ${WT_SYNC_DATABASE_WORKER_URL_FILE}
-  database_admin_url:
-    file: ${WT_SYNC_DATABASE_ADMIN_URL_FILE}
-  redis_url:
-    file: ${WT_SYNC_REDIS_URL_FILE}
-  application_secret:
-    file: ${WT_SYNC_APPLICATION_SECRET_FILE}
-  encryption_secret:
-    file: ${WT_SYNC_ENCRYPTION_SECRET_FILE}
-  encryption_previous_secrets:
-    file: ${WT_SYNC_ENCRYPTION_PREVIOUS_SECRETS_FILE}
-  smtp_password:
-    file: ${WT_SYNC_SMTP_PASSWORD_FILE}
-  vapid_private_key:
-    file: ${WT_SYNC_VAPID_PRIVATE_KEY_FILE}
-  telegram_bot_token:
-    file: ${WT_SYNC_TELEGRAM_BOT_TOKEN_FILE}
-  bootstrap_admin_password:
-    file: ${WT_SYNC_BOOTSTRAP_ADMIN_PASSWORD_FILE}

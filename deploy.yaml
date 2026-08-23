@@ -1,6 +1,7 @@
 # Production override for deploying the images built by the publish workflow.
 # Use together with compose.yaml; !reset prevents Compose from falling back to
-# the local Dockerfiles when a registry image is unavailable.
+# the local Dockerfiles when a registry image is unavailable. Runtime settings,
+# including direct ENV secrets, are inherited from compose.yaml.
 x-backend-image: &backend-image
   image: ${WT_SYNC_BACKEND_IMAGE:-ghcr.io/david-loe/worshiptools-churchtools-sync-backend:main}
   pull_policy: ${WT_SYNC_IMAGE_PULL_POLICY:-always}
