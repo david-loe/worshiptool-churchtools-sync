@@ -157,10 +157,6 @@ class PlacementRule:
     song_start: int = 0
     song_end: int | None = None
 
-    def __post_init__(self) -> None:
-        if self.song_start < 0 or (self.song_end is not None and self.song_end < self.song_start):
-            raise ValueError("invalid song slice")
-
 
 @dataclass(frozen=True, slots=True)
 class ProfileConfig:

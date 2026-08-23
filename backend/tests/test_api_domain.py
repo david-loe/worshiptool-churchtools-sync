@@ -771,6 +771,10 @@ def test_openapi_exposes_versioned_contract_without_secret_response_fields(setti
     assert {"id", "anchor", "relation", "song_start", "song_end"}.issubset(
         placement_schema["properties"]
     )
+    assert "minimum" not in placement_schema["properties"]["song_start"]
+    assert "minimum" not in placement_schema["properties"]["song_end"]["anyOf"][0]
+    assert "negative Werte" in placement_schema["properties"]["song_start"]["description"]
+    assert "negative Werte" in placement_schema["properties"]["song_end"]["description"]
     selector_schema = document["components"]["schemas"]["EventSelectorConfig"]
     assert selector_schema["additionalProperties"] is False
     assert "calendar_id" not in selector_schema["properties"]

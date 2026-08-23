@@ -15,6 +15,7 @@ from app.schemas import (
     MemberRoleUpdate,
     NotificationPreferenceOut,
     NotificationPreferenceUpdate,
+    PlacementConfig,
     ProviderConnectionSettings,
     ProviderMetadata,
     ProfileCreate,
@@ -71,6 +72,28 @@ def test_every_http_request_model_rejects_unknown_fields(request_model):
 def test_connection_patch_rejects_the_immutable_provider_field():
     with pytest.raises(ValidationError):
         ConnectionUpdate.model_validate({"name": "Neu", "provider": "churchtools"})
+
+
+def test_placement_config_accepts_python_style_negative_slice_boundaries():
+    all_but_last = PlacementConfig.model_validate(
+        {
+            "id": "worship",
+            "anchor": {"item_type": "header", "title": "Lobpreis"},
+            "song_start": 0,
+            "song_end": -1,
+        }
+    )
+    last = PlacementConfig.model_validate(
+        {
+            "id": "closing",
+            "anchor": {"item_type": "header", "title": "Abschluss"},
+            "song_start": -1,
+            "song_end": None,
+        }
+    )
+
+    assert (all_but_last.song_start, all_but_last.song_end) == (0, -1)
+    assert (last.song_start, last.song_end) == (-1, None)
 
 
 def test_provider_settings_are_typed_timezone_only_and_provider_specific():

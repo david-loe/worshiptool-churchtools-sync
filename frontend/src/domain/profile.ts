@@ -75,8 +75,8 @@ export function sanitizeProfile(input: SyncProfileInput): SyncProfileInput {
       item_type: placement.anchor.item_type?.trim() || undefined,
       title: placement.anchor.title?.trim() || undefined,
     },
-    song_start: Math.max(0, Number(placement.song_start)),
-    song_end: placement.song_end === null || placement.song_end === undefined || String(placement.song_end) === '' ? null : Math.max(0, Number(placement.song_end)),
+    song_start: Number(placement.song_start),
+    song_end: placement.song_end === null || placement.song_end === undefined || String(placement.song_end) === '' ? null : Number(placement.song_end),
   }))
   result.arrangement_name = result.arrangement_name.trim() || 'Standard-Arrangement'
   result.agenda_item_defaults.title = nullableTrimmed(result.agenda_item_defaults.title)

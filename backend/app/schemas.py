@@ -426,14 +426,16 @@ class PlacementConfig(APIRequest):
     id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
     anchor: AgendaAnchorConfig
     relation: Literal["before", "at", "after"] = "after"
-    song_start: int = Field(default=0, ge=0)
-    song_end: int | None = Field(default=None, ge=0)
-
-    @model_validator(mode="after")
-    def validate_slice(self) -> "PlacementConfig":
-        if self.song_end is not None and self.song_end < self.song_start:
-            raise ValueError("song_end darf nicht kleiner als song_start sein")
-        return self
+    song_start: int = Field(
+        default=0,
+        description="Inklusiver Song-Startindex; negative Werte zählen vom Ende.",
+    )
+    song_end: int | None = Field(
+        default=None,
+        description=(
+            "Exklusiver Song-Endindex; negative Werte zählen vom Ende, null reicht bis zum Ende."
+        ),
+    )
 
 
 class ProfileNotificationConfig(APIRequest):

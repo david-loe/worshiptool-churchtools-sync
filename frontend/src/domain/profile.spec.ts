@@ -45,6 +45,21 @@ describe('Profilmodell', () => {
     expect(sanitizeProfile(profile).name).toBe('Reaktiv')
   })
 
+  it('bewahrt negative Song-Grenzen für relative Slices', () => {
+    const profile = newProfile()
+    profile.placements = [
+      { ...profile.placements[0]!, song_start: 0, song_end: -1 },
+      { ...profile.placements[0]!, id: 'closing', song_start: -1, song_end: null },
+    ]
+
+    const result = sanitizeProfile(profile)
+
+    expect(result.placements.map(({ song_start, song_end }) => ({ song_start, song_end }))).toEqual([
+      { song_start: 0, song_end: -1 },
+      { song_start: -1, song_end: null },
+    ])
+  })
+
   it('sendet ausschließlich kanonische Array-Eventfilter', () => {
     const profile = newProfile()
     const legacyRule = profile.event_rules[0]! as typeof profile.event_rules[number] & {

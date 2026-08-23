@@ -74,6 +74,116 @@ def source_song(song_id: str = "wt-song", ccli: str | None = "123") -> SourceSon
     return SourceSong(song_id, "Amazing Grace", "John Newton", ccli)
 
 
+def _plan_split_placements(
+    song_count: int, placements: tuple[PlacementRule, ...] | None = None
+):
+    start = dt("2026-01-01T10:00:00Z")
+    source_ids = tuple(f"source-{index}" for index in range(song_count))
+    source_songs = tuple(
+        SourceSong(song_id, f"Song {index}", "Artist", str(100 + index))
+        for index, song_id in enumerate(source_ids)
+    )
+    target_songs = tuple(
+        TargetSong(
+            f"target-{index}",
+            f"Song {index}",
+            "Artist",
+            str(100 + index),
+            (Arrangement(f"arrangement-{index}", "Standard", True),),
+        )
+        for index in range(song_count)
+    )
+    configured_placements = placements if placements is not None else (
+        PlacementRule(
+            "worship",
+            AgendaAnchor(item_type="header", title="Lobpreis"),
+            AnchorRelation.AFTER,
+            song_start=0,
+            song_end=-1,
+        ),
+        PlacementRule(
+            "closing",
+            AgendaAnchor(item_type="header", title="Abschluss"),
+            AnchorRelation.AFTER,
+            song_start=-1,
+        ),
+    )
+    split_profile = ProfileConfig(
+        id="profile-1",
+        revision=3,
+        source_timezone="Europe/Berlin",
+        target_timezone="Europe/Berlin",
+        match_mode=MatchMode.EXACT_TIME,
+        placements=configured_placements,
+        song_category_id=7,
+    )
+    return SyncPlanner().plan(
+        run_id=f"negative-slices-{song_count}",
+        profile=split_profile,
+        created_at=dt("2026-01-01T00:00:00Z"),
+        source_events=(SourceEvent("source", "Service", (start,), source_ids),),
+        target_events=(TargetEvent("target", "Event", start),),
+        source_songs=source_songs,
+        target_songs=target_songs,
+        agendas={
+            "target": Agenda(
+                "target",
+                (
+                    AgendaItem("worship-header", 0, "header", "Lobpreis"),
+                    AgendaItem("closing-header", 1, "header", "Abschluss"),
+                ),
+            )
+        },
+        ownerships={},
+    )
+
+
+def test_negative_song_boundaries_split_off_the_last_song() -> None:
+    plan = _plan_split_placements(4)
+
+    assert plan.events[0].status is EventPlanStatus.READY
+    assert [action.payload["source_key"] for action in plan.events[0].actions] == [
+        "worship:0:source-0",
+        "worship:1:source-1",
+        "worship:2:source-2",
+        "closing:3:source-3",
+    ]
+
+
+def test_negative_song_boundaries_handle_one_or_no_songs() -> None:
+    one_song = _plan_split_placements(1)
+    no_songs = _plan_split_placements(0)
+
+    assert one_song.events[0].status is EventPlanStatus.READY
+    assert [action.payload["source_key"] for action in one_song.events[0].actions] == [
+        "closing:0:source-0"
+    ]
+    assert no_songs.events == ()
+
+
+def test_overlap_detection_uses_indexes_resolved_from_negative_boundaries() -> None:
+    overlapping = _plan_split_placements(
+        2,
+        (
+            PlacementRule(
+                "all",
+                AgendaAnchor(item_type="header", title="Lobpreis"),
+                AnchorRelation.AFTER,
+            ),
+            PlacementRule(
+                "last",
+                AgendaAnchor(item_type="header", title="Abschluss"),
+                AnchorRelation.AFTER,
+                song_start=-1,
+            ),
+        ),
+    )
+
+    assert overlapping.events[0].status is EventPlanStatus.FAILED
+    assert overlapping.events[0].issues[0].code == "placement_overlap"
+    assert overlapping.events[0].issues[0].details["song_indexes"] == [1]
+
+
 def test_event_matching_supports_exact_instant_and_local_date() -> None:
     source = SourceEvent("s", "Service", (dt("2026-03-29T10:00:00+02:00"),), ("song",))
     same_instant = TargetEvent("exact", "Gottesdienst", dt("2026-03-29T08:00:00Z"))
