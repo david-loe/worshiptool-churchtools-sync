@@ -259,9 +259,12 @@ dd { min-width: 0; margin: 0; overflow-wrap: anywhere; font-size: .82rem; }
 .repeat-card { padding: 1rem; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
 .repeat-card > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: .8rem; }
 .repeat-card h3 { margin: 0; }
+.song-selection-description { margin: -.2rem 0 0; }
+.song-selection-description strong { color: var(--ink); }
 .standalone { margin-top: 1rem; }
 .check-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: .8rem; }
 .schedule-fields { margin-top: 1rem; }
+.schedule-hint { margin: .65rem 0 0; }
 .sticky-editor-actions { position: sticky; z-index: 3; bottom: 1rem; display: flex; align-items: center; justify-content: flex-end; gap: .6rem; padding: .75rem; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,.94); box-shadow: var(--shadow); backdrop-filter: blur(10px); }
 .sticky-editor-actions > span { margin-right: auto; color: var(--warning); font-size: .75rem; font-weight: 700; }
 

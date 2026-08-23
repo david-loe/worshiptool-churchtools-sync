@@ -235,7 +235,17 @@ test('Onboarding setzt gespeicherte Verbindungen und ein deaktiviertes Profil fo
     ...source, id: 'target-1', provider: 'churchtools', name: 'ChurchTools', base_url: 'https://example.church.tools',
     credential_hint: 'Login-Token hinterlegt',
   }
-  const disabledProfile = { ...profile, enabled: false }
+  const disabledProfile = {
+    ...profile,
+    enabled: false,
+    placements: [{
+      id: 'main',
+      anchor: { item_type: 'header', title: 'Lobpreis' },
+      relation: 'after',
+      song_start: 0,
+      song_end: null,
+    }],
+  }
   const requests: string[] = []
   let profileRevision = disabledProfile.revision
   await page.route('**/api/v1/**', async (route) => {
@@ -289,6 +299,16 @@ test('Onboarding setzt gespeicherte Verbindungen und ein deaktiviertes Profil fo
   await page.getByRole('button', { name: 'Alle Einstellungen bearbeiten' }).click()
   await expect(page).toHaveURL(`/profiles/${profile.id}`)
   expect(requests.filter((request) => request.endsWith(`/profiles/${profile.id}/preview`))).toHaveLength(previewsBeforeEditor)
+  await expect(page.getByText('Innerhalb einer Regel müssen alle gesetzten Filter passen')).toBeVisible()
+
+  const songStart = page.getByLabel('Erster Song (0-basiert)', { exact: false })
+  const songEnd = page.getByLabel('Ende exklusiv (optional)', { exact: false })
+  await songStart.fill('0')
+  await songEnd.fill('-1')
+  await expect(page.getByText('Auswahl: Alle Songs außer dem letzten werden verwendet.')).toBeVisible()
+  await songStart.fill('-1')
+  await songEnd.fill('')
+  await expect(page.getByText('Auswahl: Nur der letzte Song wird verwendet.')).toBeVisible()
 
   expect(requests).not.toContain(`POST /api/v1/workspaces/${workspace.id}/connections`)
   expect(requests).not.toContain(`POST /api/v1/workspaces/${workspace.id}/profiles`)

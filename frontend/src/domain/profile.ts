@@ -1,5 +1,59 @@
 import type { SyncProfile, SyncProfileInput } from '@/api/types'
 
+export function describeSongSelection(songStart: unknown, songEnd: unknown): string {
+  const start = integerValue(songStart)
+  const endIsOpen = songEnd === null || songEnd === undefined || String(songEnd).trim() === ''
+  const end = endIsOpen ? null : integerValue(songEnd)
+
+  if (start === null) return 'Bitte gib einen ganzzahligen Startwert ein.'
+  if (!endIsOpen && end === null) return 'Bitte verwende für das Ende eine ganze Zahl oder lasse es leer.'
+
+  if (start === 0 && end === null) return 'Alle Songs werden verwendet.'
+  if (start === 0 && end === -1) return 'Alle Songs außer dem letzten werden verwendet.'
+  if (start === -1 && end === null) return 'Nur der letzte Song wird verwendet.'
+  if (start === 0 && end !== null && end < -1) {
+    return `Alle Songs außer den letzten ${Math.abs(end)} Songs werden verwendet.`
+  }
+  if (start < -1 && end === null) {
+    return `Die letzten ${Math.abs(start)} Songs werden verwendet.`
+  }
+  if (start >= 0 && end !== null && end >= 0) {
+    if (end <= start) return 'Diese Auswahl enthält keine Songs.'
+    if (end === start + 1) return `Nur Song ${start + 1} wird verwendet.`
+    if (start === 0) return `Die ersten ${end} Songs werden verwendet.`
+    return `Songs ${start + 1} bis ${end} werden verwendet.`
+  }
+  if (start >= 0 && end !== null && end < 0) {
+    const omitted = Math.abs(end)
+    const ending = omitted === 1 ? 'dem letzten Song' : `den letzten ${omitted} Songs`
+    return `Ab Song ${start + 1} werden alle Songs außer ${ending} verwendet.`
+  }
+  if (start < 0 && end !== null && end < 0) {
+    if (end <= start) return 'Diese Auswahl enthält keine Songs.'
+    return `Vom ${relativeSong(start)} bis vor den ${relativeSong(end)} werden die Songs verwendet.`
+  }
+  if (start < 0 && end === 0) return 'Diese Auswahl enthält keine Songs.'
+  if (start < 0 && end !== null) {
+    return `Vom ${relativeSong(start)} bis einschließlich Song ${end} werden Songs verwendet; bei kurzen Setlists kann die Auswahl leer sein.`
+  }
+  return 'Bitte prüfe die eingegebenen Song-Grenzen.'
+}
+
+function integerValue(value: unknown): number | null {
+  if (typeof value !== 'number' && typeof value !== 'string') return null
+  if (typeof value === 'string' && value.trim() === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && Number.isInteger(parsed) ? parsed : null
+}
+
+function relativeSong(value: number): string {
+  const distance = Math.abs(value)
+  if (distance === 1) return 'letzten Song'
+  if (distance === 2) return 'vorletzten Song'
+  if (distance === 3) return 'drittletzten Song'
+  return `${distance}. Song vom Ende`
+}
+
 export function newProfile(): SyncProfileInput {
   return {
     name: 'Standard-Synchronisation',

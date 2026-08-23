@@ -1,9 +1,31 @@
 import { describe, expect, it } from 'vitest'
 import { reactive } from 'vue'
 import type { ProviderMetadata, SyncProfileInput } from '@/api/types'
-import { newProfile, sanitizeProfile } from './profile'
+import { describeSongSelection, newProfile, sanitizeProfile } from './profile'
 
 describe('Profilmodell', () => {
+  it.each([
+    [0, null, 'Alle Songs werden verwendet.'],
+    [0, -1, 'Alle Songs außer dem letzten werden verwendet.'],
+    [-1, null, 'Nur der letzte Song wird verwendet.'],
+    [0, -3, 'Alle Songs außer den letzten 3 Songs werden verwendet.'],
+    [-3, null, 'Die letzten 3 Songs werden verwendet.'],
+    [1, 4, 'Songs 2 bis 4 werden verwendet.'],
+    [2, 3, 'Nur Song 3 wird verwendet.'],
+    [3, 2, 'Diese Auswahl enthält keine Songs.'],
+    [-3, -1, 'Vom drittletzten Song bis vor den letzten Song werden die Songs verwendet.'],
+    [1, -2, 'Ab Song 2 werden alle Songs außer den letzten 2 Songs verwendet.'],
+    [-2, 3, 'Vom vorletzten Song bis einschließlich Song 3 werden Songs verwendet; bei kurzen Setlists kann die Auswahl leer sein.'],
+  ])('beschreibt die Song-Auswahl %s:%s verständlich', (start, end, expected) => {
+    expect(describeSongSelection(start, end)).toBe(expected)
+  })
+
+  it('beschreibt ungültige Zwischenstände ohne technische Werte', () => {
+    expect(describeSongSelection('', null)).toBe('Bitte gib einen ganzzahligen Startwert ein.')
+    expect(describeSongSelection(null, null)).toBe('Bitte gib einen ganzzahligen Startwert ein.')
+    expect(describeSongSelection(0, 1.5)).toBe('Bitte verwende für das Ende eine ganze Zahl oder lasse es leer.')
+  })
+
   it('verwendet sichere und ressourcenschonende Standardwerte', () => {
     const profile = newProfile()
     expect(profile).toMatchObject({
