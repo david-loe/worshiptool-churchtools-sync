@@ -8,14 +8,12 @@ const MAX_AUTOMATIC_ITEMS = 50_000
 
 export interface RequestOptions extends Omit<RequestInit, 'body'> {
   body?: unknown
-  ifMatch?: string
   workspaceId?: string
   cacheForMs?: number
 }
 
 export interface ApiResponse<T> {
   data: T
-  etag?: string
   retryAfter?: number
 }
 
@@ -87,7 +85,6 @@ async function requestWithMeta<T>(path: string, options: RequestOptions = {}): P
   const headers = new Headers(options.headers)
   headers.set('Accept', 'application/json, application/problem+json')
   if (options.body !== undefined) headers.set('Content-Type', 'application/json')
-  if (options.ifMatch) headers.set('If-Match', options.ifMatch)
   if (MUTATING_METHODS.has(method)) {
     const csrfToken = readCookie('wt_csrf')
     if (csrfToken) headers.set('X-CSRF-Token', csrfToken)
@@ -105,7 +102,7 @@ async function requestWithMeta<T>(path: string, options: RequestOptions = {}): P
   if (!response.ok) throw new ApiError(await parseProblem(response), retryAfter, response.headers)
 
   const data = response.status === 204 ? undefined as T : await response.json() as T
-  const result: ApiResponse<T> = { data, etag: response.headers.get('ETag') ?? undefined, retryAfter }
+  const result: ApiResponse<T> = { data, retryAfter }
   if (method === 'GET' && options.workspaceId && options.cacheForMs && generation !== undefined
       && tenantCache.isTokenCurrent(options.workspaceId, generation)) {
     tenantCache.set(options.workspaceId, cacheKey, result, options.cacheForMs)

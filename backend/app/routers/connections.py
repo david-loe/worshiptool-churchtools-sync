@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Annotated
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Header, Query, Request, Response, status
+from fastapi import APIRouter, Query, Request, status
 from sqlalchemy import func, or_, select
 
 from ..dependencies import CsrfDep, DbDep, SettingsDep, WorkspaceAccessDep, WorkspaceAdminDep
@@ -27,27 +26,6 @@ from ..security import SecretCipher, normalize_email
 router = APIRouter(
     prefix="/workspaces/{workspace_id}/connections", tags=["Verbindungen"]
 )
-
-
-def _etag(revision: int) -> str:
-    return f'"{revision}"'
-
-
-def _expected_revision(if_match: str | None) -> int:
-    if if_match is None:
-        raise ProblemException(
-            428,
-            "Vorbedingung erforderlich",
-            "Sende den zuletzt gelesenen ETag im If-Match-Header.",
-            "if_match_required",
-        )
-    value = if_match.removeprefix("W/").strip().strip('"')
-    try:
-        return int(value)
-    except ValueError as exc:
-        raise ProblemException(
-            400, "Ungültiger ETag", "If-Match ist ungültig.", "invalid_etag"
-        ) from exc
 
 
 def _validated_base_url(provider: ProviderType, raw: str | None) -> str | None:
@@ -322,7 +300,6 @@ def create_connection(
     settings: SettingsDep,
     db: DbDep,
     csrf: CsrfDep,
-    response: Response = None,
 ) -> ProviderConnection:
     workspace = db.scalar(
         select(Workspace)
@@ -371,8 +348,6 @@ def create_connection(
         )
     db.commit()
     connection.delete_blockers = []
-    if response is not None:
-        response.headers["ETag"] = _etag(connection.revision)
     return connection
 
 
@@ -381,12 +356,9 @@ def get_connection(
     connection_id: uuid.UUID,
     access: WorkspaceAccessDep,
     db: DbDep,
-    response: Response = None,
 ) -> ProviderConnection:
     connection = _connection(db, access.workspace.id, connection_id)
     _annotate_delete_blockers(db, access.workspace.id, [connection])
-    if response is not None:
-        response.headers["ETag"] = _etag(connection.revision)
     return connection
 
 
@@ -398,8 +370,6 @@ def update_connection(
     settings: SettingsDep,
     db: DbDep,
     csrf: CsrfDep,
-    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
-    response: Response = None,
 ) -> ProviderConnection:
     workspace = db.scalar(
         select(Workspace)
@@ -423,15 +393,6 @@ def update_connection(
     if connection is None:
         raise ProblemException(
             404, "Nicht gefunden", "Verbindung nicht gefunden.", "not_found"
-        )
-    expected = _expected_revision(if_match)
-    if expected != connection.revision:
-        raise ProblemException(
-            412,
-            "Verbindung wurde geändert",
-            "Lade die Verbindung neu und führe deine Änderung erneut aus.",
-            "revision_conflict",
-            headers={"ETag": _etag(connection.revision)},
         )
     referenced = db.scalar(
         select(SyncProfile.id)
@@ -475,8 +436,6 @@ def update_connection(
     connection.revision += 1
     db.commit()
     _annotate_delete_blockers(db, workspace.id, [connection])
-    if response is not None:
-        response.headers["ETag"] = _etag(connection.revision)
     return connection
 
 
@@ -486,7 +445,6 @@ def delete_connection(
     access: WorkspaceAdminDep,
     db: DbDep,
     csrf: CsrfDep,
-    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
 ) -> None:
     workspace = db.scalar(
         select(Workspace)
@@ -506,15 +464,6 @@ def delete_connection(
     if connection is None:
         raise ProblemException(
             404, "Nicht gefunden", "Verbindung nicht gefunden.", "not_found"
-        )
-    expected = _expected_revision(if_match)
-    if expected != connection.revision:
-        raise ProblemException(
-            412,
-            "Verbindung wurde geändert",
-            "Lade die Verbindung neu, bevor du sie löschst.",
-            "revision_conflict",
-            headers={"ETag": _etag(connection.revision)},
         )
     profile_reference = db.scalar(
         select(SyncProfile.id)

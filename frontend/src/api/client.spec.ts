@@ -60,13 +60,13 @@ describe('API-Client', () => {
     expect((error as ApiError).headers.get('X-Request-ID')).toBe('request-1')
   })
 
-  it('sendet If-Match bei revisionsgeschützten Änderungen', async () => {
+  it('sendet Änderungen ohne bedingten If-Match-Header', async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ revision: 3 }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await api.patch('/workspaces/w/profiles/p', { enabled: true }, { ifMatch: '"2"' })
+    await api.patch('/workspaces/w/profiles/p', { enabled: true })
 
-    expect(new Headers(fetchMock.mock.calls[0]![1]?.headers).get('If-Match')).toBe('"2"')
+    expect(new Headers(fetchMock.mock.calls[0]![1]?.headers).has('If-Match')).toBe(false)
   })
 
   it('lädt paginierte Ressourcen vollständig in begrenzten Seiten', async () => {

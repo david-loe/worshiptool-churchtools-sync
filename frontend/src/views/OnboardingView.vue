@@ -119,23 +119,11 @@ async function ensureConnection(
       if (!connection) throw cause
     }
   }
-  try {
-    return await api.patch<Connection>(
-      `/workspaces/${workspaceId}/connections/${connection.id}`,
-      connectionUpdatePayload(input, true),
-      { workspaceId, ifMatch: `"${connection.revision}"` },
-    )
-  } catch (cause) {
-    if (!(cause instanceof ApiError) || cause.status !== 412) throw cause
-    const refreshed = await api.allPages<Connection>(`/workspaces/${workspaceId}/connections`, { workspaceId, cache: 'no-store' })
-    const latest = connectionContinuation(refreshed, input)
-    if (!latest) throw cause
-    return api.patch<Connection>(
-      `/workspaces/${workspaceId}/connections/${latest.id}`,
-      connectionUpdatePayload(input, true),
-      { workspaceId, ifMatch: `"${latest.revision}"` },
-    )
-  }
+  return api.patch<Connection>(
+    `/workspaces/${workspaceId}/connections/${connection.id}`,
+    connectionUpdatePayload(input, true),
+    { workspaceId },
+  )
 }
 
 async function continueAfterConnections(): Promise<void> {
@@ -182,23 +170,11 @@ async function saveProfile(): Promise<SyncProfile | null> {
     const conflictingName = profiles.find((item) => item.name === payload.name && item.id !== existing?.id)
     if (!existing && conflictingName) throw new Error('Ein anderes Profil verwendet diesen Namen bereits. Wähle einen eindeutigen Profilnamen.')
     if (existing) {
-      try {
-        savedProfile.value = await api.patch<SyncProfile>(
-          `/workspaces/${workspaceId}/profiles/${existing.id}`,
-          payload,
-          { workspaceId, ifMatch: `"${existing.revision}"` },
-        )
-      } catch (cause) {
-        if (!(cause instanceof ApiError) || cause.status !== 412) throw cause
-        const refreshed = await api.allPages<SyncProfile>(`/workspaces/${workspaceId}/profiles`, { workspaceId, cache: 'no-store' })
-        existing = refreshed.find((item) => item.id === existing?.id)
-        if (!existing) throw cause
-        savedProfile.value = await api.patch<SyncProfile>(
-          `/workspaces/${workspaceId}/profiles/${existing.id}`,
-          payload,
-          { workspaceId, ifMatch: `"${existing.revision}"` },
-        )
-      }
+      savedProfile.value = await api.patch<SyncProfile>(
+        `/workspaces/${workspaceId}/profiles/${existing.id}`,
+        payload,
+        { workspaceId },
+      )
     } else {
       try {
         savedProfile.value = await api.post<SyncProfile>(`/workspaces/${workspaceId}/profiles`, payload, { workspaceId })
@@ -210,7 +186,7 @@ async function saveProfile(): Promise<SyncProfile | null> {
         savedProfile.value = await api.patch<SyncProfile>(
           `/workspaces/${workspaceId}/profiles/${existing.id}`,
           payload,
-          { workspaceId, ifMatch: `"${existing.revision}"` },
+          { workspaceId },
         )
       }
     }
@@ -295,7 +271,7 @@ async function finish(): Promise<void> {
   if (!workspaceId || !savedProfile.value) return
   const profileToEnable = savedProfile.value
   await run(async () => {
-    await api.patch<SyncProfile>(`/workspaces/${workspaceId}/profiles/${profileToEnable.id}`, { enabled: true }, { ifMatch: `"${profileToEnable.revision}"` })
+    await api.patch<SyncProfile>(`/workspaces/${workspaceId}/profiles/${profileToEnable.id}`, { enabled: true })
     await router.push('/dashboard')
   })
 }

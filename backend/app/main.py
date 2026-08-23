@@ -63,9 +63,8 @@ def _iter_api_routes(routes, prefix: str = ""):
 
 
 def _install_openapi_contract(app: FastAPI, settings: Settings) -> None:
-    """Align generated documentation with the runtime problem/ETag contract."""
+    """Align generated documentation with the runtime problem contract."""
 
-    api_prefix = settings.api_prefix
     original_openapi = app.openapi
 
     def documented_openapi():
@@ -125,50 +124,6 @@ def _install_openapi_contract(app: FastAPI, settings: Settings) -> None:
                         "description": "Validierungsfehler",
                         "content": problem_content,
                     }
-                parameters = operation.get("parameters", [])
-                has_if_match = False
-                for parameter in parameters:
-                    if (
-                        isinstance(parameter, dict)
-                        and parameter.get("in") == "header"
-                        and str(parameter.get("name", "")).casefold() == "if-match"
-                    ):
-                        parameter["required"] = True
-                        has_if_match = True
-                if has_if_match:
-                    responses["412"] = {
-                        "description": "Die Ressource wurde zwischenzeitlich geändert",
-                        "headers": {
-                            "ETag": {
-                                "description": "Aktuelle Revision der Ressource",
-                                "schema": {"type": "string"},
-                            }
-                        },
-                        "content": problem_content,
-                    }
-                    responses["428"] = {
-                        "description": "If-Match ist erforderlich",
-                        "content": problem_content,
-                    }
-
-        etag_operations = {
-            ("post", f"{api_prefix}/workspaces/{{workspace_id}}/connections"): "201",
-            ("get", f"{api_prefix}/workspaces/{{workspace_id}}/connections/{{connection_id}}"): "200",
-            ("patch", f"{api_prefix}/workspaces/{{workspace_id}}/connections/{{connection_id}}"): "200",
-            ("post", f"{api_prefix}/workspaces/{{workspace_id}}/profiles"): "201",
-            ("get", f"{api_prefix}/workspaces/{{workspace_id}}/profiles/{{profile_id}}"): "200",
-            ("patch", f"{api_prefix}/workspaces/{{workspace_id}}/profiles/{{profile_id}}"): "200",
-        }
-        for (method, path), status_code in etag_operations.items():
-            operation = schema.get("paths", {}).get(path, {}).get(method)
-            if not isinstance(operation, dict):
-                continue
-            response = operation.get("responses", {}).get(status_code)
-            if isinstance(response, dict):
-                response.setdefault("headers", {})["ETag"] = {
-                    "description": "Revision für nachfolgende If-Match-Anfragen",
-                    "schema": {"type": "string"},
-                }
         app.openapi_schema = schema
         return schema
 
@@ -259,11 +214,10 @@ def create_app(
             allow_headers=[
                 "Accept",
                 "Content-Type",
-                "If-Match",
                 runtime_settings.csrf_header_name,
                 "X-Request-ID",
             ],
-            expose_headers=["ETag", "Location", "Retry-After", "X-Request-ID"],
+            expose_headers=["Location", "Retry-After", "X-Request-ID"],
         )
 
     @app.middleware("http")

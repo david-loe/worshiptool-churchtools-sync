@@ -218,20 +218,20 @@ def test_provider_metadata_has_a_closed_typed_contract():
         )
 
 
-def test_openapi_documents_problem_media_type_etags_and_required_if_match(
+def test_openapi_documents_problem_media_type_without_conditional_etags(
     settings, database
 ):
     schema = create_app(settings, database=database).openapi()
     path = "/api/v1/workspaces/{workspace_id}/connections/{connection_id}"
     patch = schema["paths"][path]["patch"]
-    header = next(
-        item for item in patch["parameters"] if item.get("name") == "If-Match"
+    assert not any(
+        item.get("name", "").casefold() == "if-match"
+        for item in patch.get("parameters", [])
     )
-
-    assert header["required"] is True
-    assert "application/problem+json" in patch["responses"]["428"]["content"]
+    assert "412" not in patch["responses"]
+    assert "428" not in patch["responses"]
     assert "application/problem+json" in patch["responses"]["default"]["content"]
-    assert "ETag" in patch["responses"]["200"]["headers"]
+    assert "ETag" not in patch["responses"]["200"].get("headers", {})
     assert (
         schema["components"]["schemas"]["ProblemDetails"]["properties"]["errors"]
         ["anyOf"][0]["type"]

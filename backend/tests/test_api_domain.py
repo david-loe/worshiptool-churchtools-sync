@@ -5,7 +5,6 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from fastapi import Response
 from pydantic import ValidationError
 from sqlalchemy import func, select
 from starlette.requests import Request
@@ -270,7 +269,6 @@ def test_unreferenced_connection_credential_patch_merges_without_secret_loss(
         settings,
         db,
         None,
-        '"1"',
     )
     credentials = SecretCipher(settings).decrypt_json(
         updated.credentials_encrypted,
@@ -289,7 +287,6 @@ def test_unreferenced_connection_credential_patch_merges_without_secret_loss(
         settings,
         db,
         None,
-        '"2"',
     )
     credentials = SecretCipher(settings).decrypt_json(
         updated.credentials_encrypted,
@@ -321,7 +318,6 @@ def test_empty_or_incomplete_credential_update_is_rejected(db, settings):
             settings,
             db,
             None,
-            '"1"',
         )
     assert empty.value.code == "empty_credentials_update"
     db.rollback()
@@ -334,7 +330,6 @@ def test_empty_or_incomplete_credential_update_is_rejected(db, settings):
             settings,
             db,
             None,
-            '"1"',
         )
     assert incomplete.value.code == "invalid_connection_credentials"
 
@@ -382,11 +377,10 @@ def test_provider_credentials_have_bounded_values_and_preserve_password_whitespa
     assert oversized.value.code == "invalid_connection_credentials"
 
 
-def test_profile_etag_prevents_lost_updates(db, settings):
+def test_profile_updates_increment_revision_without_conditional_header(db, settings):
     user, workspace = _register(db, settings, "profile@example.org", "Profile")
     access = _access(user, workspace)
     source, target = _connections(db, settings, access)
-    response = Response()
     profile = create_profile(
         ProfileCreate(
             source_connection_id=source.id,
@@ -396,33 +390,31 @@ def test_profile_etag_prevents_lost_updates(db, settings):
             song_category_id=4,
             agenda_item_defaults={"duration": 300},
         ),
-        response,
         access,
         db,
         None,
     )
-    assert response.headers["etag"] == '"1"'
+    assert profile.revision == 1
 
-    update_profile(
+    updated = update_profile(
         profile.id,
         ProfileUpdate(name="Changed"),
-        Response(),
         access,
         db,
         None,
-        '"1"',
     )
-    with pytest.raises(ProblemException) as error:
-        update_profile(
-            profile.id,
-            ProfileUpdate(name="Stale"),
-            Response(),
-            access,
-            db,
-            None,
-            '"1"',
-        )
-    assert error.value.status == 412
+    assert updated.name == "Changed"
+    assert updated.revision == 2
+
+    updated = update_profile(
+        profile.id,
+        ProfileUpdate(name="Latest"),
+        access,
+        db,
+        None,
+    )
+    assert updated.name == "Latest"
+    assert updated.revision == 3
 
 
 @pytest.mark.parametrize("legacy_field", ["calendar_id", "campus_name"])
@@ -486,7 +478,6 @@ def test_profile_connections_can_only_change_before_remote_ownership(db, setting
             name="Main",
             song_category_id=4,
         ),
-        Response(),
         access,
         db,
         None,
@@ -498,11 +489,9 @@ def test_profile_connections_can_only_change_before_remote_ownership(db, setting
             source_connection_id=other_source.id,
             target_connection_id=other_target.id,
         ),
-        Response(),
         access,
         db,
         None,
-        '"1"',
     )
     assert updated.source_connection_id == other_source.id
     assert updated.target_connection_id == other_target.id
@@ -529,11 +518,9 @@ def test_profile_connections_can_only_change_before_remote_ownership(db, setting
                 source_connection_id=source.id,
                 target_connection_id=target.id,
             ),
-            Response(),
             access,
             db,
             None,
-            '"2"',
         )
     assert error.value.code == "profile_has_remote_bindings"
 
@@ -549,7 +536,6 @@ def test_cron_profile_rejects_sub_30_minute_schedule(db, settings):
             name="Cron profile",
             song_category_id=4,
         ),
-        Response(),
         access,
         db,
         None,
@@ -559,11 +545,9 @@ def test_cron_profile_rejects_sub_30_minute_schedule(db, settings):
         update_profile(
             profile.id,
             ProfileUpdate(schedule_type="cron", cron_expression="* * * * *"),
-            Response(),
             access,
             db,
             None,
-            '"1"',
         )
     assert error.value.code == "invalid_schedule"
     db.rollback()
@@ -572,11 +556,9 @@ def test_cron_profile_rejects_sub_30_minute_schedule(db, settings):
     updated = update_profile(
         profile.id,
         ProfileUpdate(schedule_type="cron", cron_expression="*/30 * * * *"),
-        Response(),
         access,
         db,
         None,
-        '"1"',
     )
     assert updated.cron_expression == "*/30 * * * *"
 
@@ -605,7 +587,6 @@ def test_manual_run_is_persisted_before_dispatch_and_deduplicated(db, settings):
             name="Main",
             song_category_id=4,
         ),
-        Response(),
         access,
         db,
         None,
@@ -664,7 +645,6 @@ def test_run_summary_omits_plan_and_actions_are_bounded_and_paginated(db, settin
             name="Paged",
             song_category_id=4,
         ),
-        Response(),
         access,
         db,
         None,
@@ -725,7 +705,6 @@ def test_failed_immediate_dispatch_stays_queued_and_obeys_redelivery_backoff(
             name="Queue recovery",
             song_category_id=4,
         ),
-        Response(),
         access,
         db,
         None,
@@ -855,7 +834,6 @@ def test_archiving_workspace_disables_profiles_and_cancels_active_runs(db, setti
             enabled=True,
             song_category_id=4,
         ),
-        Response(),
         access,
         db,
         None,
@@ -912,11 +890,9 @@ def test_archiving_workspace_disables_profiles_and_cancels_active_runs(db, setti
         update_profile(
             profile.id,
             ProfileUpdate(enabled=True),
-            Response(),
             access,
             db,
             None,
-            '"1"',
         )
     assert activation_error.value.code == "workspace_archived"
     db.rollback()
@@ -939,7 +915,6 @@ def test_connection_delete_returns_conflict_while_profile_references_it(db, sett
             name="Reference",
             song_category_id=4,
         ),
-        Response(),
         access,
         db,
         None,
@@ -951,64 +926,26 @@ def test_connection_delete_returns_conflict_while_profile_references_it(db, sett
     ]
 
     with pytest.raises(ProblemException) as error:
-        delete_connection(source.id, access, db, None, '"1"')
+        delete_connection(source.id, access, db, None)
 
     assert error.value.status == 409
     assert error.value.code == "connection_in_use"
 
 
-def test_connection_delete_is_etag_fenced(db, settings):
+def test_connection_delete_does_not_require_conditional_header(db, settings):
     owner, workspace = _register(db, settings, "delete-fence@example.org", "Fence")
     access = _access(owner, workspace)
     source, _target = _connections(db, settings, access)
 
-    with pytest.raises(ProblemException) as missing:
-        delete_connection(source.id, access, db, None)
-    assert missing.value.code == "if_match_required"
-    db.rollback()
-
-    with pytest.raises(ProblemException) as stale:
-        delete_connection(source.id, access, db, None, '"0"')
-    assert stale.value.status == 412
-    assert stale.value.headers == {"ETag": '"1"'}
-    db.rollback()
-
-    delete_connection(source.id, access, db, None, '"1"')
+    delete_connection(source.id, access, db, None)
     assert db.get(ProviderConnection, source.id) is None
 
 
-def test_connection_patch_is_etag_fenced_and_immutable_after_profile_use(db, settings):
+def test_connection_patch_increments_revision_and_is_immutable_after_profile_use(db, settings):
     owner, workspace = _register(db, settings, "patch@example.org", "Patch")
     access = _access(owner, workspace)
     source, target = _connections(db, settings, access)
 
-    with pytest.raises(ProblemException) as missing_etag:
-        update_connection(
-            source.id,
-            ConnectionUpdate(name="Renamed"),
-            access,
-            settings,
-            db,
-            None,
-        )
-    assert missing_etag.value.code == "if_match_required"
-    db.rollback()
-
-    with pytest.raises(ProblemException) as stale_etag:
-        update_connection(
-            source.id,
-            ConnectionUpdate(name="Renamed"),
-            access,
-            settings,
-            db,
-            None,
-            '"0"',
-        )
-    assert stale_etag.value.code == "revision_conflict"
-    assert stale_etag.value.headers["ETag"] == '"1"'
-    db.rollback()
-
-    response = Response()
     updated = update_connection(
         source.id,
         ConnectionUpdate(name="Renamed"),
@@ -1016,11 +953,8 @@ def test_connection_patch_is_etag_fenced_and_immutable_after_profile_use(db, set
         settings,
         db,
         None,
-        '"1"',
-        response,
     )
     assert updated.revision == 2
-    assert response.headers["etag"] == '"2"'
 
     create_profile(
         ProfileCreate(
@@ -1029,7 +963,6 @@ def test_connection_patch_is_etag_fenced_and_immutable_after_profile_use(db, set
             name="Uses connection",
             song_category_id=4,
         ),
-        Response(),
         access,
         db,
         None,
@@ -1041,7 +974,6 @@ def test_connection_patch_is_etag_fenced_and_immutable_after_profile_use(db, set
         settings,
         db,
         None,
-        '"2"',
     )
     assert rotated_source.revision == 3
     source_credentials = SecretCipher(settings).decrypt_json(
@@ -1060,7 +992,6 @@ def test_connection_patch_is_etag_fenced_and_immutable_after_profile_use(db, set
         settings,
         db,
         None,
-        '"3"',
     )
     assert renamed_source.revision == 4
 
@@ -1077,7 +1008,6 @@ def test_connection_patch_is_etag_fenced_and_immutable_after_profile_use(db, set
             settings,
             db,
             None,
-            '"4"',
         )
     assert account_change.value.code == "connection_identity_immutable"
     db.rollback()
@@ -1089,7 +1019,6 @@ def test_connection_patch_is_etag_fenced_and_immutable_after_profile_use(db, set
         settings,
         db,
         None,
-        '"1"',
     )
     assert rotated_target.revision == 2
     target_credentials = SecretCipher(settings).decrypt_json(
@@ -1105,7 +1034,6 @@ def test_connection_patch_is_etag_fenced_and_immutable_after_profile_use(db, set
             settings,
             db,
             None,
-            '"2"',
         )
     assert base_url_change.value.code == "connection_identity_immutable"
 
@@ -1121,7 +1049,6 @@ def test_profile_delete_preserves_terminal_run_history(db, settings):
             name="History profile",
             song_category_id=4,
         ),
-        Response(),
         access,
         db,
         None,
@@ -1142,7 +1069,7 @@ def test_profile_delete_preserves_terminal_run_history(db, settings):
     ]
 
     with pytest.raises(ProblemException) as error:
-        delete_profile(profile.id, access, db, None, '"1"')
+        delete_profile(profile.id, access, db, None)
 
     assert error.value.status == 409
     assert error.value.code == "profile_has_run_history"
@@ -1160,7 +1087,6 @@ def test_cancel_run_only_transitions_a_locked_queued_run(db, settings):
             name="Cancelable",
             song_category_id=4,
         ),
-        Response(),
         access,
         db,
         None,
@@ -1212,7 +1138,6 @@ def test_agenda_item_defaults_patch_merges_and_explicit_null_resets(db, settings
                 "duration": 300,
             },
         ),
-        Response(),
         access,
         db,
         None,
@@ -1223,11 +1148,9 @@ def test_agenda_item_defaults_patch_merges_and_explicit_null_resets(db, settings
         ProfileUpdate(
             agenda_item_defaults={"title": None, "duration": 600}
         ),
-        Response(),
         access,
         db,
         None,
-        '"1"',
     )
     assert updated.agenda_item_defaults == {
         "note": "Bleibt erhalten",
@@ -1238,10 +1161,8 @@ def test_agenda_item_defaults_patch_merges_and_explicit_null_resets(db, settings
     reset = update_profile(
         profile.id,
         ProfileUpdate(agenda_item_defaults=None),
-        Response(),
         access,
         db,
         None,
-        '"2"',
     )
     assert reset.agenda_item_defaults == {}

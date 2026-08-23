@@ -63,7 +63,7 @@ async function toggle(profile: SyncProfile): Promise<void> {
   if (!id) return
   busyId.value = profile.id
   try {
-    await api.patch<SyncProfile>(`/workspaces/${id}/profiles/${profile.id}`, { enabled: !profile.enabled }, { ifMatch: `"${profile.revision}"` })
+    await api.patch<SyncProfile>(`/workspaces/${id}/profiles/${profile.id}`, { enabled: !profile.enabled })
     await load()
   } catch (cause) {
     toasts.show('error', 'Profil konnte nicht geändert werden', errorMessage(cause))
@@ -130,7 +130,7 @@ async function remove(profile: SyncProfile): Promise<void> {
   const id = workspaceStore.activeId
   if (!id) return
   try {
-    await api.delete(`/workspaces/${id}/profiles/${profile.id}`, { ifMatch: `"${profile.revision}"` })
+    await api.delete(`/workspaces/${id}/profiles/${profile.id}`)
     toasts.show('success', 'Profil gelöscht')
     if (profiles.value.length === 1 && offset.value > 0) offset.value = Math.max(0, offset.value - limit)
     await load()

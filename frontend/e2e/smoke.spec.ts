@@ -246,18 +246,18 @@ test('Onboarding setzt gespeicherte Verbindungen und ein deaktiviertes Profil fo
     if (path.endsWith('/workspaces')) return json(route, { items: [workspace], total: 1, limit: 50, offset: 0 })
     if (path.endsWith('/connections') && request.method() === 'GET') return json(route, { items: [source, target], total: 2, limit: 200, offset: 0 })
     if (path.endsWith(`/connections/${source.id}`) && request.method() === 'PATCH') {
-      expect(request.headers()['if-match']).toBe('"1"')
+      expect(request.headers()['if-match']).toBeUndefined()
       return json(route, { ...source, revision: 2 })
     }
     if (path.endsWith(`/connections/${target.id}`) && request.method() === 'PATCH') {
-      expect(request.headers()['if-match']).toBe('"1"')
+      expect(request.headers()['if-match']).toBeUndefined()
       return json(route, { ...target, revision: 2 })
     }
     if (path.endsWith('/test')) return json(route, { succeeded: true, message: 'Verbunden' })
     if (path.endsWith(`/connections/${target.id}/metadata`)) return json(route, { data: { calendars: [], campuses: [], song_categories: [{ id: '4', name: 'Lobpreis' }] }, retrieved_at: profile.updated_at })
     if (path.endsWith('/profiles') && request.method() === 'GET') return json(route, { items: [disabledProfile], total: 1, limit: 200, offset: 0 })
     if (path.endsWith(`/profiles/${profile.id}`) && request.method() === 'PATCH') {
-      expect(request.headers()['if-match']).toBe(`"${profileRevision}"`)
+      expect(request.headers()['if-match']).toBeUndefined()
       profileRevision += 1
       return json(route, { ...disabledProfile, revision: profileRevision })
     }

@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, Header, Query, Response, status
+from fastapi import APIRouter, Query, status
 from sqlalchemy import func, select
 
 from ..dependencies import CsrfDep, DbDep, WorkspaceAccessDep, WorkspaceAdminDep
@@ -31,10 +31,6 @@ from ..schemas import (
 
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/profiles", tags=["Sync-Profile"])
-
-
-def _etag(revision: int) -> str:
-    return f'"{revision}"'
 
 
 def _locked_workspace(db: DbDep, workspace_id: uuid.UUID) -> Workspace:
@@ -82,21 +78,6 @@ def _annotate_delete_blockers(
     order = {"run_history": 0, "remote_binding": 1}
     for profile in profiles:
         profile.delete_blockers = sorted(blockers[profile.id], key=order.__getitem__)
-
-
-def _expected_revision(if_match: str | None) -> int:
-    if if_match is None:
-        raise ProblemException(
-            428,
-            "Vorbedingung erforderlich",
-            "Sende den zuletzt gelesenen ETag im If-Match-Header.",
-            "if_match_required",
-        )
-    value = if_match.removeprefix("W/").strip().strip('"')
-    try:
-        return int(value)
-    except ValueError as exc:
-        raise ProblemException(400, "Ungültiger ETag", "If-Match ist ungültig.", "invalid_etag") from exc
 
 
 def _validate_timezone(value: str) -> str:
@@ -211,7 +192,6 @@ def list_profiles(
 @router.post("", response_model=ProfileOut, status_code=status.HTTP_201_CREATED)
 def create_profile(
     payload: ProfileCreate,
-    response: Response,
     access: WorkspaceAdminDep,
     db: DbDep,
     csrf: CsrfDep,
@@ -247,20 +227,17 @@ def create_profile(
     db.add(profile)
     db.commit()
     profile.delete_blockers = []
-    response.headers["ETag"] = _etag(profile.revision)
     return profile
 
 
 @router.get("/{profile_id}", response_model=ProfileOut)
 def get_profile(
     profile_id: uuid.UUID,
-    response: Response,
     access: WorkspaceAccessDep,
     db: DbDep,
 ) -> SyncProfile:
     profile = _profile(db, access.workspace.id, profile_id)
     _annotate_delete_blockers(db, access.workspace.id, [profile])
-    response.headers["ETag"] = _etag(profile.revision)
     return profile
 
 
@@ -268,25 +245,14 @@ def get_profile(
 def update_profile(
     profile_id: uuid.UUID,
     payload: ProfileUpdate,
-    response: Response,
     access: WorkspaceAdminDep,
     db: DbDep,
     csrf: CsrfDep,
-    if_match: str | None = Header(default=None, alias="If-Match"),
 ) -> SyncProfile:
     workspace = _locked_workspace(db, access.workspace.id)
     profile = _profile(
         db, access.workspace.id, profile_id, for_update=True
     )
-    expected = _expected_revision(if_match)
-    if expected != profile.revision:
-        raise ProblemException(
-            412,
-            "Konfiguration wurde geändert",
-            "Lade das Profil neu und führe deine Änderung erneut aus.",
-            "revision_conflict",
-            headers={"ETag": _etag(profile.revision)},
-        )
     values = payload.model_dump(exclude_unset=True)
     if "agenda_item_defaults" in payload.model_fields_set:
         values["agenda_item_defaults"] = _merge_agenda_defaults(
@@ -393,7 +359,6 @@ def update_profile(
     profile.revision += 1
     db.commit()
     _annotate_delete_blockers(db, workspace.id, [profile])
-    response.headers["ETag"] = _etag(profile.revision)
     return profile
 
 
@@ -403,14 +368,11 @@ def delete_profile(
     access: WorkspaceAdminDep,
     db: DbDep,
     csrf: CsrfDep,
-    if_match: str | None = Header(default=None, alias="If-Match"),
 ) -> None:
     _locked_workspace(db, access.workspace.id)
     profile = _profile(
         db, access.workspace.id, profile_id, for_update=True
     )
-    if _expected_revision(if_match) != profile.revision:
-        raise ProblemException(412, "Konfiguration wurde geändert", "Das Profil wurde zwischenzeitlich geändert.", "revision_conflict", headers={"ETag": _etag(profile.revision)})
     run_history = db.scalar(
         select(SyncRun.id)
         .where(

@@ -28,7 +28,6 @@ const previewing = ref(false)
 const dirty = ref(false)
 const initialized = ref(false)
 const error = ref<string | null>(null)
-const etag = ref<string | undefined>()
 const sourceConnections = computed(() => connections.value.filter((item) => item.provider === 'worshiptools'))
 const targetConnections = computed(() => connections.value.filter((item) => item.provider === 'churchtools'))
 
@@ -42,9 +41,8 @@ async function load(): Promise<void> {
   try {
     connections.value = await api.allPages<Connection>(`/workspaces/${workspaceId}/connections`, { workspaceId })
     if (profileId.value) {
-      const response = await api.getWithMeta<SyncProfile>(`/workspaces/${workspaceId}/profiles/${profileId.value}`, { workspaceId })
-      etag.value = response.etag ?? `"${response.data.revision}"`
-      form.value = profileInputFromProfile(response.data)
+      const profile = await api.get<SyncProfile>(`/workspaces/${workspaceId}/profiles/${profileId.value}`, { workspaceId })
+      form.value = profileInputFromProfile(profile)
     } else {
       form.value.source_connection_id = sourceConnections.value[0]?.id ?? ''
       form.value.target_connection_id = targetConnections.value[0]?.id ?? ''
@@ -107,20 +105,17 @@ async function save(stay = false): Promise<SyncProfile | null> {
     const payload = sanitizeProfile(form.value)
     let saved: SyncProfile
     if (profileId.value) {
-      saved = await api.patch<SyncProfile>(`/workspaces/${workspaceId}/profiles/${profileId.value}`, payload, { ifMatch: etag.value })
+      saved = await api.patch<SyncProfile>(`/workspaces/${workspaceId}/profiles/${profileId.value}`, payload)
     } else {
       saved = await api.post<SyncProfile>(`/workspaces/${workspaceId}/profiles`, payload)
     }
     dirty.value = false
-    etag.value = `"${saved.revision}"`
     toasts.show('success', 'Profil gespeichert')
     if (!stay) await router.push('/profiles')
     else if (!profileId.value) await router.replace(`/profiles/${saved.id}`)
     return saved
   } catch (cause) {
-    error.value = cause instanceof ApiError && cause.status === 412
-      ? 'Dieses Profil wurde zwischenzeitlich geändert. Bitte lade die Seite neu und übertrage deine Änderung erneut.'
-      : errorMessage(cause)
+    error.value = errorMessage(cause)
     return null
   } finally {
     saving.value = false

@@ -6,7 +6,7 @@ import ErrorBanner from '@/components/ErrorBanner.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import { useFocusTrap } from '@/composables/useFocusTrap'
-import { api, ApiError, errorMessage, pagePath } from '@/api/client'
+import { api, errorMessage, pagePath } from '@/api/client'
 import type { Connection, ConnectionInput, Provider } from '@/api/types'
 import { connectionForEdit, connectionPayload, connectionUpdatePayload, newConnection, resetCredentialFields } from '@/domain/connection'
 import { formatDateTime } from '@/utils/format'
@@ -101,7 +101,6 @@ async function save(): Promise<void> {
   try {
     if (editing.value) {
       await api.patch<Connection>(`/workspaces/${workspaceId}/connections/${editing.value.id}`, payload, {
-        ifMatch: `"${editing.value.revision}"`,
         workspaceId,
       })
       toasts.show('success', 'Verbindung aktualisiert')
@@ -112,10 +111,6 @@ async function save(): Promise<void> {
     dialogOpen.value = false
     await load()
   } catch (cause) {
-    if (cause instanceof ApiError && cause.status === 412) {
-      await load()
-      toasts.show('warning', 'Verbindung wurde zwischenzeitlich geändert', 'Die aktuelle Version wurde neu geladen.')
-    }
     error.value = errorMessage(cause)
   } finally {
     saving.value = false
@@ -148,7 +143,6 @@ async function removeConnection(connection: Connection): Promise<void> {
   if (!workspaceId) return
   try {
     await api.delete(`/workspaces/${workspaceId}/connections/${connection.id}`, {
-      ifMatch: `"${connection.revision}"`,
       workspaceId,
     })
     toasts.show('success', 'Verbindung gelöscht')
