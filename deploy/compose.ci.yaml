@@ -1,6 +1,12 @@
-# Image-only override used by CI after the two production Dockerfiles have
+# Image-only override used by CI after the three production Dockerfiles have
 # already been built and loaded into the runner's local engine.
 services:
+  postgres:
+    image: worship-sync-postgres:ci
+    pull_policy: never
+    entrypoint: !reset null
+    volumes: !override
+      - postgres-data:/var/lib/postgresql
   migrate:
     image: worship-sync-backend:ci
   api:

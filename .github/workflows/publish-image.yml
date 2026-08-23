@@ -66,6 +66,20 @@ jobs:
             type=semver,pattern={{major}}
             type=sha
 
+      - name: PostgreSQL image metadata
+        id: postgres-meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
+        with:
+          images: |
+            davidloe/worshiptools-churchtools-sync-postgres
+            ghcr.io/david-loe/worshiptools-churchtools-sync-postgres
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha
+
       - name: Build and push backend
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
@@ -91,3 +105,16 @@ jobs:
           sbom: true
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,mode=max,scope=frontend
+
+      - name: Build and push PostgreSQL
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: ./deploy/postgres
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.postgres-meta.outputs.tags }}
+          labels: ${{ steps.postgres-meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=postgres
+          cache-to: type=gha,mode=max,scope=postgres

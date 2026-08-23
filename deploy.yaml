@@ -7,6 +7,12 @@ x-backend-image: &backend-image
   pull_policy: ${WT_SYNC_IMAGE_PULL_POLICY:-always}
 
 services:
+  postgres:
+    image: ${WT_SYNC_POSTGRES_IMAGE:-ghcr.io/david-loe/worshiptools-churchtools-sync-postgres:main}
+    pull_policy: ${WT_SYNC_IMAGE_PULL_POLICY:-always}
+    entrypoint: !reset null
+    volumes: !override
+      - postgres-data:/var/lib/postgresql
   migrate:
     <<: *backend-image
     build: !reset null

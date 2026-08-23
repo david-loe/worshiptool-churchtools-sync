@@ -31,8 +31,15 @@ gewählt werden:
 ```bash
 WT_SYNC_BACKEND_IMAGE=ghcr.io/david-loe/worshiptools-churchtools-sync-backend:1.2.3 \
 WT_SYNC_FRONTEND_IMAGE=ghcr.io/david-loe/worshiptools-churchtools-sync-frontend:1.2.3 \
+WT_SYNC_POSTGRES_IMAGE=ghcr.io/david-loe/worshiptools-churchtools-sync-postgres:1.2.3 \
 docker compose -f compose.yaml -f deploy.yaml up -d --wait
 ```
+
+`protainer.yaml` ist eine eigenständige Portainer-Definition ohne Build-Kontexte
+oder relative Bind-Mounts. Sie kann im Webeditor eingefügt oder als einzelne
+Datei hochgeladen werden; die Werte aus `portainer.env` werden separat in
+Portainer importiert. Der PostgreSQL-Init-Hook ist im veröffentlichten
+PostgreSQL-Image enthalten.
 
 Die Standard-Compose-Konfiguration reicht Secrets direkt aus der git-ignorierten
 `.env` an die jeweils berechtigten Container weiter. Erforderlich sind vier
@@ -114,9 +121,10 @@ pnpm --dir frontend test
 pnpm --dir frontend build
 ```
 
-Backend und Frontend besitzen eigene Dockerfiles. Direkte und transitive
-Abhängigkeiten werden exakt gelockt (Python inklusive Distributions-Hashes) und
-über CI gemeinsam mit Migration, Compose-Konfiguration und Images geprüft.
+Backend, Frontend und die PostgreSQL-Erweiterung besitzen eigene Dockerfiles.
+Direkte und transitive Abhängigkeiten werden exakt gelockt (Python inklusive
+Distributions-Hashes) und über CI gemeinsam mit Migration,
+Compose-Konfiguration und Images geprüft.
 Alle direkten Backend-Pins und – mit Ausnahme von TypeScript 7, das derzeit den
 Vue-Typechecker bricht – alle Frontend-Pins entsprechen dem Registry-Stand vom
 22. August 2026. Updates erfolgen bewusst zusammen mit Tests und neuem Lockfile.
