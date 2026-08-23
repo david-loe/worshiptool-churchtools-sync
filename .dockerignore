@@ -17,8 +17,6 @@ frontend/dist
 frontend/coverage
 playwright-report
 test-results
-config.yaml
-db.yaml
 *.sqlite3
 *.db
 *.log

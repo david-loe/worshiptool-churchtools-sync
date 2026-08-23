@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+/.codex
 .venv/
 __pycache__/
 *.py[cod]
@@ -19,9 +20,6 @@ test-results/
 # Local Compose secret material (paths are documented in .env.example)
 /secrets/
 
-# Archived CLI configuration/cache must stay outside the platform repository.
-config.yaml
-db.yaml
 *.sqlite3
 *.db
 

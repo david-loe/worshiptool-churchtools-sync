@@ -5,13 +5,11 @@ from pathlib import Path
 
 import pytest
 
-# Keep both legacy root tests and the packaged ``app`` imports working when
-# pytest is launched from the repository root (as CI does).
+# Keep packaged ``app`` imports working when pytest is launched from the
+# repository root (as CI does).
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
-REPOSITORY_ROOT = BACKEND_ROOT.parent
-for path in (REPOSITORY_ROOT, BACKEND_ROOT):
-    if str(path) not in sys.path:
-        sys.path.insert(0, str(path))
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.config import Settings
 from app.database import Database

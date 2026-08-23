@@ -69,12 +69,10 @@ Weitere Dokumente:
 
 - [Architektur](docs/architecture.md)
 - [Sicherheitsmodell](docs/security.md)
-- [Cutover vom Legacy-CLI](docs/cutover.md)
 
 ## Entwicklung und Tests
 
 ```bash
-python3 -m pytest -q tests
 python3 -m pip install --require-hashes --no-deps -r backend/requirements-test.lock
 PYTHONPATH=backend python3 -m pytest -q backend/tests
 pnpm --dir frontend install
@@ -85,9 +83,6 @@ pnpm --dir frontend build
 Backend und Frontend besitzen eigene Dockerfiles. Direkte und transitive
 Abhängigkeiten werden exakt gelockt (Python inklusive Distributions-Hashes) und
 über CI gemeinsam mit Migration, Compose-Konfiguration und Images geprüft.
-Auch das Legacy-Image installiert ausschließlich den gehashten
-`requirements-runtime.lock`; Testwerkzeuge liegen getrennt im
-`requirements-legacy.lock` und gelangen nicht ins Produktionsimage.
 Alle direkten Backend-Pins und – mit Ausnahme von TypeScript 7, das derzeit den
 Vue-Typechecker bricht – alle Frontend-Pins entsprechen dem Registry-Stand vom
 22. August 2026. Updates erfolgen bewusst zusammen mit Tests und neuem Lockfile.
@@ -141,11 +136,3 @@ Für eine Rotation des AES-GCM-Masterschlüssels:
 
 Der Rotationslauf ist transaktional. Er verschlüsselt Provider-Zugänge,
 TOTP-Secrets, Push-Abonnements und noch aufbewahrte Outbox-Nachrichten neu.
-
-## Legacy-CLI
-
-Der bisherige Einmal-Sync bleibt nur als Quellcode- und Testreferenz im
-Repository. Seine produktiven `config.yaml`-/`db.yaml`-Dateien und sein
-Compose-Startpfad wurden entfernt, damit es genau einen schreibenden
-Betriebsweg gibt. Bestehende Legacy-Dateien werden nicht importiert und sollten
-nur offline als Cutover-Referenz archiviert werden.
