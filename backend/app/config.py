@@ -199,6 +199,7 @@ class Settings(BaseSettings):
     smtp_password_file: Path | None = Field(default=None, exclude=True, repr=False)
     smtp_from: str = "Worship Sync <noreply@localhost>"
     smtp_starttls: bool = True
+    smtp_implicit_tls: bool = False
     smtp_timeout_seconds: float = Field(default=15.0, ge=1.0, le=30.0)
     vapid_public_key: str | None = None
     vapid_private_key: SecretStr | None = None
@@ -369,6 +370,11 @@ class Settings(BaseSettings):
         return value
 
     def model_post_init(self, __context: object) -> None:
+        if self.smtp_starttls and self.smtp_implicit_tls:
+            raise ValueError(
+                "WT_SYNC_SMTP_STARTTLS and WT_SYNC_SMTP_IMPLICIT_TLS "
+                "must not both be true"
+            )
         minimum_outbox_lease = int(self.smtp_timeout_seconds * 6) + 30
         if self.outbox_lease_seconds < minimum_outbox_lease:
             raise ValueError(

@@ -127,6 +127,14 @@ def test_production_email_verification_requires_smtp():
         _production_settings(smtp_host=None)
 
 
+def test_smtp_tls_modes_are_mutually_exclusive():
+    with pytest.raises(ValidationError, match="must not both be true"):
+        Settings(smtp_starttls=True, smtp_implicit_tls=True)
+
+    implicit_tls = Settings(smtp_starttls=False, smtp_implicit_tls=True)
+    assert implicit_tls.smtp_implicit_tls
+
+
 @pytest.mark.parametrize(
     "updates",
     [

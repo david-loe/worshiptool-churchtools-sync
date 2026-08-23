@@ -85,9 +85,11 @@ class SmtpEmailSender:
         self,
         settings: Settings,
         smtp_factory: Callable[..., smtplib.SMTP] = smtplib.SMTP,
+        smtp_ssl_factory: Callable[..., smtplib.SMTP] = smtplib.SMTP_SSL,
     ):
         self.settings = settings
         self.smtp_factory = smtp_factory
+        self.smtp_ssl_factory = smtp_ssl_factory
 
     def send(self, recipient: str, payload: Mapping[str, Any]) -> None:
         if not self.settings.smtp_host:
@@ -113,11 +115,20 @@ class SmtpEmailSender:
         if html_body:
             message.add_alternative(str(html_body), subtype="html")
         try:
-            with self.smtp_factory(
-                self.settings.smtp_host,
-                self.settings.smtp_port,
-                timeout=self.settings.smtp_timeout_seconds,
-            ) as smtp:
+            if self.settings.smtp_implicit_tls:
+                smtp_connection = self.smtp_ssl_factory(
+                    self.settings.smtp_host,
+                    self.settings.smtp_port,
+                    timeout=self.settings.smtp_timeout_seconds,
+                    context=ssl.create_default_context(),
+                )
+            else:
+                smtp_connection = self.smtp_factory(
+                    self.settings.smtp_host,
+                    self.settings.smtp_port,
+                    timeout=self.settings.smtp_timeout_seconds,
+                )
+            with smtp_connection as smtp:
                 smtp.ehlo()
                 if self.settings.smtp_starttls:
                     smtp.starttls(context=ssl.create_default_context())
