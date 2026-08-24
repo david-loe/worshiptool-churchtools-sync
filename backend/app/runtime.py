@@ -19,6 +19,7 @@ from .database import Database
 from .dramatiq_setup import configure_dramatiq
 from .event_filters import canonicalize_persisted_event_rules
 from .models import (
+    EventSyncState,
     ProviderConnection,
     ProviderType,
     NotificationOutbox,
@@ -45,6 +46,8 @@ from .sync.models import (
     ActionStatus,
     AgendaAnchor,
     AnchorRelation,
+    EventPlan,
+    EventSyncCheckpoint,
     EventSelector,
     MatchMode,
     Ownership,
@@ -54,6 +57,7 @@ from .sync.models import (
     RunSpecification,
     RunStatus,
     SyncPlan,
+    SyncMode,
 )
 from .sync.serialization import sync_plan_from_dict
 
@@ -263,6 +267,82 @@ class SqlRunRepository:
                 )
                 for row in rows
             )
+
+    async def event_sync_states(
+        self, profile_id: str, event_keys: Sequence[tuple[str, str]]
+    ) -> Mapping[tuple[str, str], EventSyncCheckpoint]:
+        return await asyncio.to_thread(
+            self._event_sync_states, _uuid(profile_id), tuple(event_keys)
+        )
+
+    def _event_sync_states(
+        self, profile_id: uuid.UUID, event_keys: tuple[tuple[str, str], ...]
+    ) -> dict[tuple[str, str], EventSyncCheckpoint]:
+        if not event_keys:
+            return {}
+        requested = set(event_keys)
+        source_event_ids = {source_event_id for source_event_id, _ in requested}
+        target_event_ids = {target_event_id for _, target_event_id in requested}
+        with _worker_session(self.database) as db:
+            rows = db.scalars(
+                select(EventSyncState).where(
+                    EventSyncState.profile_id == profile_id,
+                    EventSyncState.source_event_id.in_(source_event_ids),
+                    EventSyncState.target_event_id.in_(target_event_ids),
+                )
+            ).all()
+            return {
+                (row.source_event_id, row.target_event_id): EventSyncCheckpoint(
+                    source_event_id=row.source_event_id,
+                    target_event_id=row.target_event_id,
+                    source_fingerprint=row.source_fingerprint,
+                    config_fingerprint=row.config_fingerprint,
+                )
+                for row in rows
+                if (row.source_event_id, row.target_event_id) in requested
+            }
+
+    async def record_event_synced(
+        self, run_id: str, event: EventPlan, owner_token: str
+    ) -> None:
+        await asyncio.to_thread(
+            self._record_event_synced, _uuid(run_id), event, owner_token
+        )
+
+    def _record_event_synced(
+        self, run_id: uuid.UUID, event: EventPlan, owner_token: str
+    ) -> None:
+        if (
+            event.target_event_id is None
+            or event.source_fingerprint is None
+            or event.config_fingerprint is None
+        ):
+            return
+        with _worker_session(self.database) as db:
+            run = _active_leased_run(db, run_id, owner_token)
+            row = db.scalar(
+                select(EventSyncState)
+                .where(
+                    EventSyncState.profile_id == run.profile_id,
+                    EventSyncState.source_event_id == event.source_event_id,
+                    EventSyncState.target_event_id == event.target_event_id,
+                )
+                .with_for_update()
+            )
+            if row is None:
+                row = EventSyncState(
+                    workspace_id=run.workspace_id,
+                    profile_id=run.profile_id,
+                    source_event_id=event.source_event_id,
+                    target_event_id=event.target_event_id,
+                    source_fingerprint=event.source_fingerprint,
+                    config_fingerprint=event.config_fingerprint,
+                )
+                db.add(row)
+            else:
+                row.source_fingerprint = event.source_fingerprint
+                row.config_fingerprint = event.config_fingerprint
+                row.synced_at = _utcnow()
 
     async def load_plan(self, run_id: str) -> SyncPlan | None:
         return await asyncio.to_thread(self._load_plan, _uuid(run_id))
@@ -1007,6 +1087,7 @@ def _profile_config(profile: SyncProfile, *, revision: int) -> ProfileConfig:
         revision=revision,
         source_timezone=profile.source_timezone,
         target_timezone=profile.target_timezone,
+        sync_mode=SyncMode(profile.sync_mode),
         match_mode=MatchMode(profile.match_mode),
         selectors=selectors,
         placements=placements,

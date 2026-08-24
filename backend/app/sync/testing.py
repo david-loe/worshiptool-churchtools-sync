@@ -14,6 +14,8 @@ from .models import (
     Agenda,
     AgendaItem,
     Arrangement,
+    EventPlan,
+    EventSyncCheckpoint,
     Ownership,
     PlannedAction,
     RunSpecification,
@@ -196,13 +198,22 @@ class StaticProviderRegistry:
 
 
 class MemoryRunRepository:
-    def __init__(self, specification: RunSpecification, ownerships: Sequence[Ownership] = ()) -> None:
+    def __init__(
+        self,
+        specification: RunSpecification,
+        ownerships: Sequence[Ownership] = (),
+        event_sync_states: Sequence[EventSyncCheckpoint] = (),
+    ) -> None:
         self.specification = specification
         self._claimed = False
         self.owner_token: str | None = None
         self.plan: SyncPlan | None = None
         self.executions: dict[str, ActionExecution] = {}
         self.ownership_rows = list(ownerships)
+        self.event_sync_rows = {
+            (row.source_event_id, row.target_event_id): row
+            for row in event_sync_states
+        }
         self.status: RunStatus | None = None
         self.error: Mapping[str, Any] | None = None
         self.cancel = False
@@ -227,6 +238,34 @@ class MemoryRunRepository:
         return tuple(
             row for row in self.ownership_rows if row.target_event_id == target_event_id
         )
+
+    async def event_sync_states(
+        self, profile_id: str, event_keys: Sequence[tuple[str, str]]
+    ) -> Mapping[tuple[str, str], EventSyncCheckpoint]:
+        return {
+            key: self.event_sync_rows[key]
+            for key in event_keys
+            if key in self.event_sync_rows
+        }
+
+    async def record_event_synced(
+        self, run_id: str, event: EventPlan, owner_token: str
+    ) -> None:
+        self._assert_owner(owner_token)
+        if (
+            event.target_event_id is None
+            or event.source_fingerprint is None
+            or event.config_fingerprint is None
+        ):
+            return
+        key = (event.source_event_id, event.target_event_id)
+        self.event_sync_rows[key] = EventSyncCheckpoint(
+            source_event_id=event.source_event_id,
+            target_event_id=event.target_event_id,
+            source_fingerprint=event.source_fingerprint,
+            config_fingerprint=event.config_fingerprint,
+        )
+        self.sequence.append(f"record_event_synced:{event.source_event_id}")
 
     async def persist_plan(
         self, run_id: str, plan: SyncPlan, owner_token: str

@@ -9,6 +9,7 @@ const profile = {
   enabled: true,
   source_connection_id: 'source-1',
   target_connection_id: 'target-1',
+  sync_mode: 'source_changes_only',
   match_mode: 'exact_time',
   source_timezone: 'Europe/Berlin',
   target_timezone: 'Europe/Berlin',

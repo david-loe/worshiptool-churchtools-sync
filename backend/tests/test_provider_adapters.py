@@ -25,6 +25,19 @@ def run(coro):
     return asyncio.run(coro)
 
 
+def test_worshiptools_song_parser_deliberately_ignores_key_and_tempo() -> None:
+    base = {
+        "id": "song-1",
+        "name": "Amazing Grace",
+        "artist": "John Newton",
+        "ccli": "123",
+    }
+
+    assert worshiptools_module._parse_song(base) == worshiptools_module._parse_song(
+        {**base, "key": "G", "tempo": 72, "bpm": 72}
+    )
+
+
 def test_churchtools_rejects_non_tenant_or_non_https_urls() -> None:
     with pytest.raises(ValueError):
         ChurchToolsClient("http://demo.church.tools", "token")

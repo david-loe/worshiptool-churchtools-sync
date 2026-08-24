@@ -465,6 +465,7 @@ class ProfileCreate(APIRequest):
     target_connection_id: uuid.UUID
     name: str = Field(min_length=1, max_length=120)
     enabled: bool = False
+    sync_mode: Literal["source_changes_only", "enforce_source"] = "source_changes_only"
     match_mode: Literal["exact_time", "date_only"] = "exact_time"
     source_timezone: str = "UTC"
     target_timezone: str = "UTC"
@@ -516,6 +517,7 @@ class ProfileUpdate(APIRequest):
     target_connection_id: uuid.UUID | None = None
     name: str | None = Field(default=None, min_length=1, max_length=120)
     enabled: bool | None = None
+    sync_mode: Literal["source_changes_only", "enforce_source"] | None = None
     match_mode: Literal["exact_time", "date_only"] | None = None
     source_timezone: str | None = None
     target_timezone: str | None = None
@@ -549,6 +551,7 @@ class ProfileUpdate(APIRequest):
             "target_connection_id",
             "name",
             "enabled",
+            "sync_mode",
             "match_mode",
             "source_timezone",
             "target_timezone",
@@ -580,6 +583,7 @@ class ProfileOut(ORMModel):
     name: str
     enabled: bool
     revision: int
+    sync_mode: Literal["source_changes_only", "enforce_source"]
     match_mode: str
     source_timezone: str
     target_timezone: str

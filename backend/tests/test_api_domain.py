@@ -395,15 +395,17 @@ def test_profile_updates_increment_revision_without_conditional_header(db, setti
         None,
     )
     assert profile.revision == 1
+    assert profile.sync_mode == "source_changes_only"
 
     updated = update_profile(
         profile.id,
-        ProfileUpdate(name="Changed"),
+        ProfileUpdate(name="Changed", sync_mode="enforce_source"),
         access,
         db,
         None,
     )
     assert updated.name == "Changed"
+    assert updated.sync_mode == "enforce_source"
     assert updated.revision == 2
 
     updated = update_profile(
@@ -768,6 +770,7 @@ def test_openapi_exposes_versioned_contract_without_secret_response_fields(setti
     assert profile_schema["properties"]["placements"]["items"]["$ref"].endswith(
         "/PlacementConfig"
     )
+    assert profile_schema["properties"]["sync_mode"]["default"] == "source_changes_only"
     assert {"id", "anchor", "relation", "song_start", "song_end"}.issubset(
         placement_schema["properties"]
     )

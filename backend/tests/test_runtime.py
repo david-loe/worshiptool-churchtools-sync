@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.models import (
+    EventSyncState,
     NotificationOutbox,
     OutboxStatus,
     ProviderConnection,
@@ -36,6 +37,8 @@ from app.sync.models import (
     ActionExecution,
     ActionKind,
     ActionStatus,
+    EventPlan,
+    EventPlanStatus,
     Ownership,
     PlannedAction,
     RunStatus,
@@ -488,6 +491,42 @@ def test_ownership_lookup_exposes_other_profile_on_same_target_connection(
 
     assert len(rows) == 1
     assert rows[0].profile_id == str(second.id)
+
+
+def test_run_repository_persists_and_loads_verified_event_sync_state(
+    database, db, settings
+) -> None:
+    workspace, source, target = _seed_connections(db, settings)
+    profile_row = _profile(db, workspace, source, target, "Event state")
+    run = _run(db, profile_row, status=SyncRunStatus.QUEUED)
+    run_id = str(run.id)
+    profile_id = str(profile_row.id)
+    db.commit()
+    repository = SqlRunRepository(database)
+
+    specification = asyncio.run(repository.claim(run_id, "state-owner", 300))
+    assert specification is not None
+    event = EventPlan(
+        id="event-plan",
+        source_event_id="wt-event",
+        target_event_id="ct-event",
+        status=EventPlanStatus.READY,
+        source_fingerprint="a" * 64,
+        config_fingerprint="b" * 64,
+    )
+    asyncio.run(repository.record_event_synced(run_id, event, "state-owner"))
+
+    states = asyncio.run(
+        repository.event_sync_states(profile_id, (("wt-event", "ct-event"),))
+    )
+    assert states[("wt-event", "ct-event")].source_fingerprint == "a" * 64
+    assert states[("wt-event", "ct-event")].config_fingerprint == "b" * 64
+    db.expire_all()
+    persisted = db.scalar(
+        select(EventSyncState).where(EventSyncState.profile_id == profile_row.id)
+    )
+    assert persisted is not None
+    assert persisted.workspace_id == workspace.id
 
 
 def test_provider_registry_requires_complete_worshiptools_credentials_and_strips_ct_prefix(

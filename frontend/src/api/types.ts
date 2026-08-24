@@ -175,6 +175,7 @@ export interface SyncProfile {
   enabled: boolean
   source_connection_id: UUID
   target_connection_id: UUID
+  sync_mode: 'source_changes_only' | 'enforce_source'
   match_mode: 'exact_time' | 'date_only'
   source_timezone: string
   target_timezone: string

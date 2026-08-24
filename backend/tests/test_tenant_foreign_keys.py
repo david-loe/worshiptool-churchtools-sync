@@ -184,7 +184,7 @@ def test_fresh_sqlite_migration_installs_and_reverses_tenant_foreign_keys(
         _assert_seed_preserved(engine, seeded)
         with engine.connect() as connection:
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-                "20260823_0013"
+                "20260823_0014"
             )
     finally:
         engine.dispose()
@@ -293,12 +293,16 @@ def _seed_valid_graph(engine) -> dict[str, str]:
             placement_id="seed-placement",
         )
         db.add_all([run, binding])
-        db.commit()
-        return {
+        db.flush()
+        seeded = {
             "profile_id": str(profile.id),
             "run_id": str(run.id),
             "binding_id": str(binding.id),
         }
+        db.commit()
+        # Do not refresh current ORM models against this intentionally old
+        # migration revision; newer mapped columns do not exist there yet.
+        return seeded
 
 
 def _assert_seed_preserved(engine, seeded: dict[str, str]) -> None:
@@ -316,8 +320,13 @@ def _assert_seed_preserved(engine, seeded: dict[str, str]) -> None:
             {"id": seeded["binding_id"].replace("-", "")},
         ) == 1
 
+
 def _assert_migrated_constraints(engine) -> None:
     inspector = inspect(engine)
+    assert "sync_mode" in {
+        column["name"] for column in inspector.get_columns("sync_profiles")
+    }
+    assert inspector.has_table("event_sync_states")
     provider_uniques = {
         (constraint["name"], tuple(constraint["column_names"]))
         for constraint in inspector.get_unique_constraints("provider_connections")
@@ -356,6 +365,12 @@ def _assert_migrated_constraints(engine) -> None:
         ),
         (
             "remote_bindings",
+            ("workspace_id", "profile_id"),
+            "sync_profiles",
+            ("workspace_id", "id"),
+        ),
+        (
+            "event_sync_states",
             ("workspace_id", "profile_id"),
             "sync_profiles",
             ("workspace_id", "id"),

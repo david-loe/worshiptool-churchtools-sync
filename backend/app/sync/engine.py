@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Sequence
 
 from .errors import ConcurrentModificationError, NotFoundError, SyncError
+from .fingerprints import source_event_fingerprint, sync_config_fingerprint
 from .matching import normalize_ccli, normalize_text
 from .models import (
     ActionExecution,
@@ -24,6 +25,7 @@ from .models import (
     Ownership,
     PlannedAction,
     RunStatus,
+    SyncMode,
     SyncPlan,
 )
 from .planner import SyncPlanner
@@ -123,7 +125,41 @@ class SyncOrchestrator:
                 from .matching import match_events
 
                 preliminary = match_events(specification.profile, tuple(source_events), tuple(target_events))
-                target_ids = sorted({match.target.id for match in preliminary if match.target is not None})
+                matched = tuple(
+                    match
+                    for match in preliminary
+                    if match.status is EventPlanStatus.READY and match.target is not None
+                )
+                event_fingerprints = {
+                    (match.source.id, match.target.id): source_event_fingerprint(
+                        match.source, source_songs
+                    )
+                    for match in matched
+                }
+                config_fingerprint = sync_config_fingerprint(
+                    specification.profile,
+                    source_connection_id=specification.source_connection_id,
+                    target_connection_id=specification.target_connection_id,
+                )
+                checkpoints = await self.repository.event_sync_states(
+                    specification.profile.id, tuple(event_fingerprints)
+                )
+                unchanged_event_keys: frozenset[tuple[str, str]] = frozenset()
+                if specification.profile.sync_mode is SyncMode.SOURCE_CHANGES_ONLY:
+                    unchanged_event_keys = frozenset(
+                        key
+                        for key, fingerprint in event_fingerprints.items()
+                        if (checkpoint := checkpoints.get(key)) is not None
+                        and checkpoint.source_fingerprint == fingerprint
+                        and checkpoint.config_fingerprint == config_fingerprint
+                    )
+                target_ids = sorted(
+                    {
+                        match.target.id
+                        for match in matched
+                        if (match.source.id, match.target.id) not in unchanged_event_keys
+                    }
+                )
                 agendas: dict[str, Agenda] = {}
                 ownerships: dict[str, Sequence[Ownership]] = {}
                 for target_event_id in target_ids:
@@ -150,6 +186,9 @@ class SyncOrchestrator:
                     target_songs=target_songs,
                     agendas=agendas,
                     ownerships=ownerships,
+                    event_fingerprints=event_fingerprints,
+                    config_fingerprint=config_fingerprint,
+                    unchanged_event_keys=unchanged_event_keys,
                 )
                 # This commit is the hard boundary: no provider write happens
                 # before the complete plan is durable.
@@ -321,6 +360,14 @@ class SyncOrchestrator:
                     target_connection_id,
                     owner_token,
                 )
+                if (
+                    success
+                    and event.source_fingerprint is not None
+                    and event.config_fingerprint is not None
+                ):
+                    await self.repository.record_event_synced(
+                        plan.run_id, event, owner_token
+                    )
             finally:
                 await self.event_leases.release(
                     target_connection_id, event.target_event_id, owner_token

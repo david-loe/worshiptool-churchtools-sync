@@ -10,6 +10,8 @@ from .models import (
     Agenda,
     AgendaItem,
     Arrangement,
+    EventPlan,
+    EventSyncCheckpoint,
     Ownership,
     PlannedAction,
     RunSpecification,
@@ -87,6 +89,14 @@ class RunRepository(Protocol):
     async def renew_lease(self, run_id: str, worker_id: str, lease_seconds: int) -> bool: ...
 
     async def ownerships(self, profile_id: str, target_event_id: str) -> Sequence[Ownership]: ...
+
+    async def event_sync_states(
+        self, profile_id: str, event_keys: Sequence[tuple[str, str]]
+    ) -> Mapping[tuple[str, str], EventSyncCheckpoint]: ...
+
+    async def record_event_synced(
+        self, run_id: str, event: EventPlan, owner_token: str
+    ) -> None: ...
 
     async def load_plan(self, run_id: str) -> SyncPlan | None: ...
 

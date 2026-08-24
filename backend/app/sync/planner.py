@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Mapping, Sequence
+from typing import AbstractSet, Any, Mapping, Sequence
 
 from .matching import EventMatch, SongIndex, match_events, normalize_text
 from .models import (
@@ -91,8 +91,30 @@ class SyncPlanner:
         target_songs: Sequence[TargetSong],
         agendas: Mapping[str, Agenda],
         ownerships: Mapping[str, Sequence[Ownership]],
+        event_fingerprints: Mapping[tuple[str, str], str] | None = None,
+        config_fingerprint: str | None = None,
+        unchanged_event_keys: AbstractSet[tuple[str, str]] = frozenset(),
     ) -> SyncPlan:
+        event_fingerprints = event_fingerprints or {}
         matches = match_events(profile, tuple(source_events), tuple(target_events))
+        matches = tuple(
+            EventMatch(
+                match.source,
+                match.target,
+                EventPlanStatus.SKIPPED,
+                (
+                    PlanIssue(
+                        "source_unchanged",
+                        "WorshipTools-Songs und Sync-Konfiguration sind unverändert",
+                        severity=IssueSeverity.INFO,
+                    ),
+                ),
+            )
+            if match.target is not None
+            and (match.source.id, match.target.id) in unchanged_event_keys
+            else match
+            for match in matches
+        )
         factory = _ActionFactory(run_id)
         resources, song_issues, preparation = self._plan_song_resources(
             profile, matches, source_songs, target_songs, factory
@@ -109,6 +131,8 @@ class SyncPlanner:
                     agendas,
                     ownerships,
                     factory,
+                    event_fingerprints,
+                    config_fingerprint,
                 )
             )
         needed_resources = {
@@ -256,14 +280,24 @@ class SyncPlanner:
         agendas: Mapping[str, Agenda],
         ownerships: Mapping[str, Sequence[Ownership]],
         factory: _ActionFactory,
+        event_fingerprints: Mapping[tuple[str, str], str],
+        config_fingerprint: str | None,
     ) -> EventPlan:
         event_plan_id = stable_action_id(run_id, "event", match.source.id)
+        target_event_id = match.target.id if match.target is not None else None
+        source_fingerprint = (
+            event_fingerprints.get((match.source.id, target_event_id))
+            if target_event_id is not None
+            else None
+        )
         if match.status is not EventPlanStatus.READY or match.target is None:
             return EventPlan(
                 id=event_plan_id,
                 source_event_id=match.source.id,
-                target_event_id=None,
+                target_event_id=target_event_id,
                 status=match.status,
+                source_fingerprint=source_fingerprint,
+                config_fingerprint=config_fingerprint,
                 issues=match.issues,
             )
         event_issues = tuple(
@@ -276,6 +310,8 @@ class SyncPlanner:
                 source_event_id=match.source.id,
                 target_event_id=match.target.id,
                 status=EventPlanStatus.AMBIGUOUS if ambiguous else EventPlanStatus.FAILED,
+                source_fingerprint=source_fingerprint,
+                config_fingerprint=config_fingerprint,
                 issues=event_issues,
             )
         agenda = agendas.get(match.target.id)
@@ -285,6 +321,8 @@ class SyncPlanner:
                 source_event_id=match.source.id,
                 target_event_id=match.target.id,
                 status=EventPlanStatus.SKIPPED,
+                source_fingerprint=source_fingerprint,
+                config_fingerprint=config_fingerprint,
                 issues=(
                     PlanIssue(
                         "agenda_missing",
@@ -300,6 +338,8 @@ class SyncPlanner:
                 target_event_id=match.target.id,
                 status=EventPlanStatus.FAILED,
                 initial_agenda_fingerprint=agenda.fingerprint,
+                source_fingerprint=source_fingerprint,
+                config_fingerprint=config_fingerprint,
                 issues=(PlanIssue("placements_missing", "Das Sync-Profil enthält keine Song-Platzierung"),),
             )
         actions, issues = self._plan_placements(
@@ -319,6 +359,8 @@ class SyncPlanner:
             target_event_id=match.target.id,
             status=EventPlanStatus.FAILED if has_errors else EventPlanStatus.READY,
             initial_agenda_fingerprint=agenda.fingerprint,
+            source_fingerprint=source_fingerprint,
+            config_fingerprint=config_fingerprint,
             actions=() if has_errors else tuple(actions),
             issues=tuple(issues),
         )

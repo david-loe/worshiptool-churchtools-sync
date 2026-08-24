@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { reactive } from 'vue'
-import type { ProviderMetadata, SyncProfileInput } from '@/api/types'
-import { describeSongSelection, newProfile, sanitizeProfile } from './profile'
+import type { ProviderMetadata, SyncProfile, SyncProfileInput } from '@/api/types'
+import { describeSongSelection, newProfile, profileInputFromProfile, sanitizeProfile } from './profile'
 
 describe('Profilmodell', () => {
   it.each([
@@ -33,6 +33,7 @@ describe('Profilmodell', () => {
       lookahead_days: 28,
       interval_minutes: 60,
       create_missing_songs: true,
+      sync_mode: 'source_changes_only',
       match_mode: 'exact_time',
     })
     expect(profile.notification_preferences.notify_success).toBe(false)
@@ -43,6 +44,22 @@ describe('Profilmodell', () => {
       responsible: null,
       duration: null,
     })
+  })
+
+  it('übernimmt das gewählte Sync-Verhalten beim Bearbeiten eines Profils', () => {
+    const persisted: SyncProfile = {
+      ...newProfile(),
+      id: 'profile-1',
+      workspace_id: 'workspace-1',
+      sync_mode: 'enforce_source',
+      next_scheduled_at: null,
+      delete_blockers: [],
+      revision: 2,
+      created_at: '2026-08-23T00:00:00Z',
+      updated_at: '2026-08-23T00:00:00Z',
+    }
+
+    expect(profileInputFromProfile(persisted).sync_mode).toBe('enforce_source')
   })
 
   it('erzwingt das Mindestintervall und bereinigt optionale Regeln', () => {

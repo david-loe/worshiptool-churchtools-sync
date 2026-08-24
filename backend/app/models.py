@@ -309,6 +309,9 @@ class SyncProfile(TimestampMixin, Base):
             ondelete="RESTRICT",
         ),
         Index("ix_sync_profiles_due", "enabled", "next_scheduled_at"),
+        # The database owns the new-column default. Avoid RETURNING it so an
+        # insert also remains safe during the schema-upgrade window.
+        {"implicit_returning": False},
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -322,6 +325,9 @@ class SyncProfile(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    sync_mode: Mapped[str] = mapped_column(
+        String(32), server_default="source_changes_only", nullable=False
+    )
     match_mode: Mapped[str] = mapped_column(String(32), default="exact_time", nullable=False)
     source_timezone: Mapped[str] = mapped_column(String(64), default="UTC", nullable=False)
     target_timezone: Mapped[str] = mapped_column(String(64), default="UTC", nullable=False)
@@ -345,6 +351,42 @@ class SyncProfile(TimestampMixin, Base):
     last_scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     next_scheduled_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
+    )
+
+
+class EventSyncState(Base):
+    """Last successfully verified WT input for one matched event pair."""
+
+    __tablename__ = "event_sync_states"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["workspace_id", "profile_id"],
+            ["sync_profiles.workspace_id", "sync_profiles.id"],
+            name="fk_event_sync_states_workspace_profile",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "profile_id",
+            "source_event_id",
+            "target_event_id",
+            name="uq_event_sync_states_profile_event_pair",
+        ),
+        Index("ix_event_sync_states_workspace_profile", "workspace_id", "profile_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=new_uuid
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False
+    )
+    profile_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    source_event_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    target_event_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    source_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    config_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    synced_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
     )
 
 

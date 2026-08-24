@@ -16,6 +16,11 @@ class MatchMode(str, Enum):
     DATE_ONLY = "date_only"
 
 
+class SyncMode(str, Enum):
+    SOURCE_CHANGES_ONLY = "source_changes_only"
+    ENFORCE_SOURCE = "enforce_source"
+
+
 class AnchorRelation(str, Enum):
     BEFORE = "before"
     AT = "at"
@@ -164,6 +169,7 @@ class ProfileConfig:
     revision: int
     source_timezone: str
     target_timezone: str
+    sync_mode: SyncMode = SyncMode.SOURCE_CHANGES_ONLY
     match_mode: MatchMode = MatchMode.EXACT_TIME
     selectors: tuple[EventSelector, ...] = ()
     placements: tuple[PlacementRule, ...] = ()
@@ -230,8 +236,18 @@ class EventPlan:
     target_event_id: str | None
     status: EventPlanStatus
     initial_agenda_fingerprint: str | None = None
+    source_fingerprint: str | None = None
+    config_fingerprint: str | None = None
     actions: tuple[PlannedAction, ...] = ()
     issues: tuple[PlanIssue, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class EventSyncCheckpoint:
+    source_event_id: str
+    target_event_id: str
+    source_fingerprint: str
+    config_fingerprint: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,7 +261,16 @@ class SyncPlan:
 
     @property
     def fingerprint(self) -> str:
-        encoded = json.dumps(to_primitive(self), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        primitive = to_primitive(self)
+        # Plans persisted before event snapshots existed did not contain these
+        # keys. Omitting only absent values preserves their durable fingerprint
+        # while new plans still commit both hashes.
+        for event in primitive["events"]:
+            if event.get("source_fingerprint") is None:
+                event.pop("source_fingerprint", None)
+            if event.get("config_fingerprint") is None:
+                event.pop("config_fingerprint", None)
+        encoded = json.dumps(primitive, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
     def as_dict(self) -> dict[str, Any]:

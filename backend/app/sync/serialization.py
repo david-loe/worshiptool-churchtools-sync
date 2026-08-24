@@ -48,6 +48,16 @@ def _event(value: Any) -> EventPlan:
             if item.get("initial_agenda_fingerprint") is not None
             else None
         ),
+        source_fingerprint=(
+            str(item["source_fingerprint"])
+            if item.get("source_fingerprint") is not None
+            else None
+        ),
+        config_fingerprint=(
+            str(item["config_fingerprint"])
+            if item.get("config_fingerprint") is not None
+            else None
+        ),
         actions=tuple(_action(action) for action in _list(item, "actions")),
         issues=tuple(_issue(issue) for issue in _list(item, "issues")),
     )

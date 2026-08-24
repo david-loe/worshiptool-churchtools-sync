@@ -139,6 +139,7 @@ def test_provider_settings_are_typed_timezone_only_and_provider_specific():
         "target_connection_id",
         "name",
         "enabled",
+        "sync_mode",
         "match_mode",
         "source_timezone",
         "target_timezone",

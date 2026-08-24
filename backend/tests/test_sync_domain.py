@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timezone
+import hashlib
+import json
 
 from app.sync.engine import SyncOrchestrator
 from app.sync.errors import AuthorizationError
+from app.sync.fingerprints import source_event_fingerprint, sync_config_fingerprint
 from app.sync.matching import match_events, match_song
 from app.sync.models import (
     ActionExecution,
@@ -16,6 +20,7 @@ from app.sync.models import (
     AnchorRelation,
     Arrangement,
     EventPlanStatus,
+    EventSyncCheckpoint,
     IssueSeverity,
     MatchMode,
     Ownership,
@@ -25,6 +30,7 @@ from app.sync.models import (
     RunStatus,
     SourceEvent,
     SourceSong,
+    SyncMode,
     TargetEvent,
     TargetSong,
 )
@@ -43,12 +49,18 @@ def dt(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-def profile(*, mode: MatchMode = MatchMode.EXACT_TIME) -> ProfileConfig:
+def profile(
+    *,
+    mode: MatchMode = MatchMode.EXACT_TIME,
+    sync_mode: SyncMode = SyncMode.SOURCE_CHANGES_ONLY,
+    arrangement_name: str = "Standard-Arrangement",
+) -> ProfileConfig:
     return ProfileConfig(
         id="profile-1",
         revision=3,
         source_timezone="Europe/Berlin",
         target_timezone="Europe/Berlin",
+        sync_mode=sync_mode,
         match_mode=mode,
         placements=(
             PlacementRule(
@@ -58,7 +70,83 @@ def profile(*, mode: MatchMode = MatchMode.EXACT_TIME) -> ProfileConfig:
             ),
         ),
         song_category_id=7,
+        arrangement_name=arrangement_name,
     )
+
+
+def test_source_event_fingerprint_tracks_order_and_song_matching_metadata() -> None:
+    start = dt("2026-01-01T10:00:00Z")
+    songs = (
+        SourceSong("one", "  Amazing  Grace ", "JOHN NEWTON", " 123 "),
+        SourceSong("two", "Second", "Artist", "456"),
+    )
+    event = SourceEvent("service", "Service", (start,), ("one", "two"))
+
+    original = source_event_fingerprint(event, songs)
+
+    assert original == source_event_fingerprint(
+        event,
+        (
+            SourceSong("one", "amazing grace", "john newton", "123"),
+            songs[1],
+        ),
+    )
+    assert original != source_event_fingerprint(
+        SourceEvent("service", "Service", (start,), ("two", "one")), songs
+    )
+    assert original != source_event_fingerprint(
+        SourceEvent("service", "Service", (start,), ("one",)), songs
+    )
+    assert original != source_event_fingerprint(
+        event,
+        (SourceSong("one", "Amazing Grace (Live)", "John Newton", "123"), songs[1]),
+    )
+
+
+def test_sync_config_fingerprint_only_tracks_reconciliation_settings() -> None:
+    base = profile()
+    fingerprint = sync_config_fingerprint(
+        base, source_connection_id="wt", target_connection_id="ct"
+    )
+
+    assert fingerprint == sync_config_fingerprint(
+        replace(
+            base,
+            revision=99,
+            lookahead_days=90,
+            sync_mode=SyncMode.ENFORCE_SOURCE,
+        ),
+        source_connection_id="wt",
+        target_connection_id="ct",
+    )
+    assert fingerprint != sync_config_fingerprint(
+        profile(arrangement_name="Live"),
+        source_connection_id="wt",
+        target_connection_id="ct",
+    )
+    assert fingerprint != sync_config_fingerprint(
+        base, source_connection_id="different-wt", target_connection_id="ct"
+    )
+
+
+def test_plan_fingerprint_remains_compatible_with_pre_snapshot_documents() -> None:
+    plan = _plan_split_placements(1)
+    legacy_document = plan.as_dict()
+    for event in legacy_document["events"]:
+        event.pop("source_fingerprint")
+        event.pop("config_fingerprint")
+    legacy_fingerprint = hashlib.sha256(
+        json.dumps(
+            legacy_document,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+    loaded = sync_plan_from_dict(legacy_document)
+
+    assert loaded.fingerprint == legacy_fingerprint
 
 
 def target_song(song_id: str = "ct-song", ccli: str | None = "123") -> TargetSong:
@@ -429,6 +517,171 @@ def test_orchestrator_persists_plan_then_atomically_creates_and_verifies() -> No
     assert all(execution.status.value == "verified" for execution in repository.executions.values())
 
 
+def test_default_mode_skips_unchanged_worshiptools_event_after_first_sync() -> None:
+    start = dt("2026-01-01T10:00:00Z")
+    source_event = SourceEvent("service", "Service", (start,), ("song",))
+    source = FakeSourceProvider(
+        (source_event,), (SourceSong("song", "Amazing Grace", "John Newton", "123"),)
+    )
+    target_event = TargetEvent("event", "Event", start)
+    target = FakeTargetProvider(
+        (target_event,),
+        (target_song("desired", "123"),),
+        {
+            "event": Agenda(
+                "event",
+                (
+                    AgendaItem("header", 0, "header", "Lobpreis"),
+                    AgendaItem(
+                        "desired-item",
+                        1,
+                        "song",
+                        song_id="desired",
+                        arrangement_id="arr-desired",
+                    ),
+                ),
+            )
+        },
+    )
+    first_repository = MemoryRunRepository(
+        RunSpecification("first-run", "workspace", "wt", "ct", profile())
+    )
+    first = SyncOrchestrator(
+        first_repository,
+        StaticProviderRegistry(source, target),
+        clock=type("Clock", (), {"now": lambda self: dt("2026-01-01T00:00:00Z")})(),
+        event_leases=MemoryEventLeaseManager(),
+    )
+
+    assert asyncio.run(first.execute("first-run")) is RunStatus.SUCCEEDED
+    checkpoints = tuple(first_repository.event_sync_rows.values())
+    assert len(checkpoints) == 1
+
+    async def agenda_must_not_be_loaded(event_id: str) -> Agenda:
+        raise AssertionError(f"unchanged agenda was loaded: {event_id}")
+
+    target.get_agenda = agenda_must_not_be_loaded  # type: ignore[method-assign]
+    second_repository = MemoryRunRepository(
+        RunSpecification("second-run", "workspace", "wt", "ct", profile()),
+        event_sync_states=checkpoints,
+    )
+    second = SyncOrchestrator(
+        second_repository,
+        StaticProviderRegistry(source, target),
+        clock=type("Clock", (), {"now": lambda self: dt("2026-01-01T00:00:00Z")})(),
+        event_leases=MemoryEventLeaseManager(),
+    )
+
+    assert asyncio.run(second.execute("second-run")) is RunStatus.SKIPPED
+    assert second_repository.plan is not None
+    assert second_repository.plan.events[0].status is EventPlanStatus.SKIPPED
+    assert second_repository.plan.events[0].issues[0].code == "source_unchanged"
+
+
+def test_enforce_source_mode_reconciles_even_with_matching_checkpoint() -> None:
+    start = dt("2026-01-01T10:00:00Z")
+    configured = profile(sync_mode=SyncMode.ENFORCE_SOURCE)
+    source_event = SourceEvent("service", "Service", (start,), ("song",))
+    source = FakeSourceProvider((source_event,), (source_song("song", "123"),))
+    target_event = TargetEvent("event", "Event", start)
+    desired = target_song("desired", "123")
+    old = TargetSong(
+        "old", "Old", "Artist", "999", (Arrangement("old-arr", "Old", True),)
+    )
+    checkpoint = EventSyncCheckpoint(
+        source_event_id="service",
+        target_event_id="event",
+        source_fingerprint=source_event_fingerprint(source_event, source.songs),
+        config_fingerprint=sync_config_fingerprint(
+            configured, source_connection_id="wt", target_connection_id="ct"
+        ),
+    )
+    repository = MemoryRunRepository(
+        RunSpecification("forced-run", "workspace", "wt", "ct", configured),
+        event_sync_states=(checkpoint,),
+    )
+    target = FakeTargetProvider(
+        (target_event,),
+        (desired, old),
+        {
+            "event": Agenda(
+                "event",
+                (
+                    AgendaItem("header", 0, "header", "Lobpreis"),
+                    AgendaItem(
+                        "slot", 1, "song", song_id="old", arrangement_id="old-arr"
+                    ),
+                ),
+            )
+        },
+    )
+    orchestrator = SyncOrchestrator(
+        repository,
+        StaticProviderRegistry(source, target),
+        clock=type("Clock", (), {"now": lambda self: dt("2026-01-01T00:00:00Z")})(),
+        event_leases=MemoryEventLeaseManager(),
+    )
+
+    assert asyncio.run(orchestrator.execute("forced-run")) is RunStatus.SUCCEEDED
+    assert [kind for kind, _ in target.writes] == ["replace_item"]
+    assert target.agendas["event"].items[1].song_id == "desired"
+
+
+def test_relevant_profile_change_causes_one_new_default_mode_sync() -> None:
+    start = dt("2026-01-01T10:00:00Z")
+    configured = profile(arrangement_name="New arrangement default")
+    previous = profile(arrangement_name="Previous arrangement default")
+    source_event = SourceEvent("service", "Service", (start,), ("song",))
+    source = FakeSourceProvider((source_event,), (source_song("song", "123"),))
+    checkpoint = EventSyncCheckpoint(
+        source_event_id="service",
+        target_event_id="event",
+        source_fingerprint=source_event_fingerprint(source_event, source.songs),
+        config_fingerprint=sync_config_fingerprint(
+            previous, source_connection_id="wt", target_connection_id="ct"
+        ),
+    )
+    repository = MemoryRunRepository(
+        RunSpecification("config-run", "workspace", "wt", "ct", configured),
+        event_sync_states=(checkpoint,),
+    )
+    desired = target_song("desired", "123")
+    target = FakeTargetProvider(
+        (TargetEvent("event", "Event", start),),
+        (desired,),
+        {
+            "event": Agenda(
+                "event",
+                (
+                    AgendaItem("header", 0, "header", "Lobpreis"),
+                    AgendaItem(
+                        "slot",
+                        1,
+                        "song",
+                        song_id="desired",
+                        arrangement_id="arr-desired",
+                    ),
+                ),
+            )
+        },
+    )
+    orchestrator = SyncOrchestrator(
+        repository,
+        StaticProviderRegistry(source, target),
+        clock=type("Clock", (), {"now": lambda self: dt("2026-01-01T00:00:00Z")})(),
+        event_leases=MemoryEventLeaseManager(),
+    )
+
+    assert asyncio.run(orchestrator.execute("config-run")) is RunStatus.SUCCEEDED
+    assert repository.plan is not None
+    assert repository.plan.events[0].status is EventPlanStatus.READY
+    assert repository.event_sync_rows[("service", "event")].config_fingerprint == (
+        sync_config_fingerprint(
+            configured, source_connection_id="wt", target_connection_id="ct"
+        )
+    )
+
+
 def test_dry_run_persists_plan_but_never_applies_it() -> None:
     orchestrator, repository, target = _engine_fixture(dry_run=True)
 
@@ -438,6 +691,7 @@ def test_dry_run_persists_plan_but_never_applies_it() -> None:
     assert repository.plan is not None
     assert target.writes == []
     assert repository.executions == {}
+    assert repository.event_sync_rows == {}
 
 
 def _missing_agenda_fixture(*, dry_run: bool = False):
@@ -483,6 +737,7 @@ def test_event_without_agenda_is_skipped_without_provider_writes() -> None:
     assert event.issues[0].severity is IssueSeverity.WARNING
     assert target.writes == []
     assert repository.executions == {}
+    assert repository.event_sync_rows == {}
 
 
 def test_dry_run_without_agenda_is_skipped_without_provider_writes() -> None:
@@ -853,6 +1108,7 @@ def test_one_failed_event_does_not_prevent_other_event_and_run_is_partial() -> N
 
     assert status is RunStatus.PARTIAL
     assert target_provider.agendas["target-1"].items[1].song_id == "desired"
+    assert set(repository.event_sync_rows) == {("source-1", "target-1")}
     action_ids = [action.id for event in repository.plan.events for action in event.actions]
     assert len(action_ids) == len(set(action_ids))
 
