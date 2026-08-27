@@ -16,15 +16,17 @@ const notifications = ref<AppNotification[]>([])
 const unread = ref(0)
 const unreadOnly = ref(false)
 const loading = ref(true)
-const loadingMore = ref(false)
 const markingAllRead = ref(false)
 const error = ref<string | null>(null)
 const savingPreferences = ref(false)
-const preferences = ref<UserNotificationPreferences>({ in_app_enabled: true, email_enabled: true, push_enabled: false, telegram_enabled: false, success_notifications: false })
+const preferences = ref<UserNotificationPreferences>({ email_enabled: true, push_enabled: false, success_notifications: false, failure_notifications: true, new_song_notifications: true })
 const pushDevices = ref<PushSubscriptionDevice[]>([])
 const permission = ref(typeof Notification === 'undefined' ? 'unsupported' : Notification.permission)
 const notificationTotal = ref(0)
-const hasMore = computed(() => notifications.value.length < notificationTotal.value)
+const offset = ref(0)
+const limit = 20
+const pageNumber = computed(() => Math.floor(offset.value / limit) + 1)
+const totalPages = computed(() => Math.max(1, Math.ceil(notificationTotal.value / limit)))
 
 function notificationRunLink(notification: AppNotification): string {
   const eventId = typeof notification.data.event_plan_id === 'string'
@@ -35,18 +37,22 @@ function notificationRunLink(notification: AppNotification): string {
   return `/runs/${notification.run_id}?${query}`
 }
 
-async function loadNotifications(append = false): Promise<void> {
+async function loadNotifications(): Promise<void> {
   const workspaceId = workspaceStore.activeId
   if (!workspaceId) return
   const query = new URLSearchParams({
-    limit: '100',
-    offset: append ? String(notifications.value.length) : '0',
+    limit: String(limit),
+    offset: String(offset.value),
     unread_only: String(unreadOnly.value),
   })
   const page = await api.get<NotificationPage>(`/workspaces/${workspaceId}/notifications?${query}`, { workspaceId })
-  notifications.value = append ? [...notifications.value, ...page.items] : page.items
+  notifications.value = page.items
   notificationTotal.value = page.total
   unread.value = page.unread
+  if (!page.items.length && page.total > 0 && offset.value >= page.total) {
+    offset.value = Math.max(0, (Math.ceil(page.total / limit) - 1) * limit)
+    await loadNotifications()
+  }
 }
 
 async function load(): Promise<void> {
@@ -56,14 +62,14 @@ async function load(): Promise<void> {
   error.value = null
   try {
     const [notificationPage, preferenceData, devices] = await Promise.all([
-      api.get<NotificationPage>(`/workspaces/${workspaceId}/notifications?limit=100&offset=0&unread_only=${unreadOnly.value}`, { workspaceId }),
+      api.get<NotificationPage>(`/workspaces/${workspaceId}/notifications?limit=${limit}&offset=${offset.value}&unread_only=${unreadOnly.value}`, { workspaceId }),
       api.get<UserNotificationPreferences>(`/workspaces/${workspaceId}/notifications/preferences`, { workspaceId }),
       api.get<PushSubscriptionDevice[]>(`/workspaces/${workspaceId}/notifications/push-subscriptions`, { workspaceId }),
     ])
     notifications.value = notificationPage.items
     notificationTotal.value = notificationPage.total
     unread.value = notificationPage.unread
-    preferences.value = { ...preferenceData, in_app_enabled: true }
+    preferences.value = preferenceData
     pushDevices.value = devices
   } catch (cause) {
     error.value = errorMessage(cause)
@@ -81,8 +87,7 @@ async function markRead(notification: AppNotification): Promise<void> {
     Object.assign(notification, updated)
     unread.value = Math.max(0, unread.value - 1)
     if (unreadOnly.value) {
-      notifications.value = notifications.value.filter((item) => item.id !== notification.id)
-      notificationTotal.value = Math.max(0, notificationTotal.value - 1)
+      await loadNotifications()
     }
   } catch (cause) {
     toasts.show('error', 'Benachrichtigung konnte nicht markiert werden', errorMessage(cause))
@@ -97,6 +102,7 @@ async function markAllRead(): Promise<void> {
     const result = await api.post<NotificationMarkAllReadResponse>(`/workspaces/${workspaceId}/notifications/read-all`, undefined, { workspaceId })
     unread.value = 0
     if (unreadOnly.value) {
+      offset.value = 0
       notifications.value = []
       notificationTotal.value = 0
     } else {
@@ -110,14 +116,12 @@ async function markAllRead(): Promise<void> {
   }
 }
 
-async function loadMore(): Promise<void> {
-  loadingMore.value = true
+async function changePage(direction: -1 | 1): Promise<void> {
+  offset.value = Math.max(0, offset.value + direction * limit)
   try {
-    await loadNotifications(true)
+    await loadNotifications()
   } catch (cause) {
-    toasts.show('error', 'Weitere Benachrichtigungen konnten nicht geladen werden', errorMessage(cause))
-  } finally {
-    loadingMore.value = false
+    toasts.show('error', 'Benachrichtigungsseite konnte nicht geladen werden', errorMessage(cause))
   }
 }
 
@@ -126,10 +130,7 @@ async function savePreferences(): Promise<void> {
   if (!workspaceId) return
   savingPreferences.value = true
   try {
-    preferences.value = await api.put<UserNotificationPreferences>(`/workspaces/${workspaceId}/notifications/preferences`, {
-      ...preferences.value,
-      in_app_enabled: true,
-    })
+    preferences.value = await api.put<UserNotificationPreferences>(`/workspaces/${workspaceId}/notifications/preferences`, preferences.value)
     toasts.show('success', 'Benachrichtigungspräferenzen gespeichert')
   } catch (cause) {
     toasts.show('error', 'Präferenzen konnten nicht gespeichert werden', errorMessage(cause))
@@ -186,6 +187,7 @@ async function removePushDevice(device: PushSubscriptionDevice): Promise<void> {
 }
 
 watch(unreadOnly, async () => {
+  offset.value = 0
   try {
     await loadNotifications()
   } catch (cause) {
@@ -207,10 +209,11 @@ onMounted(load)
       <div class="section-heading"><div><h2>Posteingang</h2><p>Fehler, Warnungen und wichtige Sync-Ereignisse</p></div><label class="check-label"><input v-model="unreadOnly" type="checkbox" /> <span>Nur ungelesene</span></label></div>
       <EmptyState v-if="!notifications.length" title="Keine Benachrichtigungen" text="Hier ist gerade alles erledigt." symbol="✓" />
       <ol v-else class="notification-list"><li v-for="notification in notifications" :key="notification.id" :class="[notification.severity, { unread: !notification.read_at }]"><span class="notification-symbol" aria-hidden="true">{{ notification.severity === 'error' ? '!' : notification.severity === 'warning' ? '△' : notification.severity === 'success' ? '✓' : 'i' }}</span><div><header><strong>{{ notification.title }}</strong><span>{{ formatDateTime(notification.created_at) }}</span></header><p>{{ notification.body }}</p><div><span class="category">{{ notification.category }}</span><span class="notification-actions"><button v-if="!notification.read_at" class="link-button" type="button" :aria-label="`Als gelesen markieren: ${notification.title}`" @click="markRead(notification)">Als gelesen</button><RouterLink v-if="notification.run_id" :to="notificationRunLink(notification)">{{ notification.data.event_plan_id ? 'Zum Ereignis' : 'Zum Lauf' }} →</RouterLink></span></div></div></li></ol>
-      <button v-if="hasMore" class="button button-secondary button-wide" type="button" :disabled="loadingMore" @click="loadMore">{{ loadingMore ? 'Wird geladen …' : 'Weitere Benachrichtigungen laden' }}</button>
+      <nav v-if="notificationTotal > limit" class="pagination" aria-label="Benachrichtigungsseiten"><button class="button button-small button-secondary" type="button" :disabled="offset === 0" @click="changePage(-1)">Zurück</button><span>Seite {{ pageNumber }} von {{ totalPages }}</span><button class="button button-small button-secondary" type="button" :disabled="offset + limit >= notificationTotal" @click="changePage(1)">Weiter</button></nav>
     </section>
-    <aside class="card preferences-panel"><div class="section-heading"><div><h2>Präferenzen</h2><p>Gilt für alle Profile</p></div></div>
-      <div class="preference-list"><label><span><strong>In-App</strong><small>Kanonische Quelle, immer aktiv</small></span><input :checked="true" type="checkbox" disabled /></label><label><span><strong>E-Mail</strong><small>Fehler und wichtige Warnungen</small></span><input v-model="preferences.email_enabled" type="checkbox" /></label><label><span><strong>Web Push</strong><small>{{ permission === 'granted' ? 'In diesem Browser erlaubt' : 'Browserfreigabe erforderlich' }}</small></span><input v-model="preferences.push_enabled" type="checkbox" :disabled="permission !== 'granted'" /></label><label class="deprecated"><span><strong>Telegram</strong><small>Veraltet / optional</small></span><input v-model="preferences.telegram_enabled" type="checkbox" /></label><hr /><label><span><strong>Erfolgreiche Läufe</strong><small>Kann bei vielen Profilen häufig sein</small></span><input v-model="preferences.success_notifications" type="checkbox" /></label></div>
+    <aside class="card preferences-panel"><div class="section-heading"><div><h2>Präferenzen</h2><p>Gilt für alle Profile in diesem Workspace. In-App ist immer aktiv.</p></div></div>
+      <h3>Ereignisse</h3><div class="preference-list"><label><span><strong>Erfolgreiche Läufe</strong><small>Kann bei kurzen Intervallen häufig sein</small></span><input v-model="preferences.success_notifications" type="checkbox" /></label><label><span><strong>Fehlgeschlagene Läufe</strong><small>Fehlgeschlagene, teilweise erfolgreiche und abgebrochene Läufe</small></span><input v-model="preferences.failure_notifications" type="checkbox" /></label><label><span><strong>Neue Songs</strong><small>Meldet neu in ChurchTools angelegte Songs</small></span><input v-model="preferences.new_song_notifications" type="checkbox" /></label></div>
+      <h3>Kanäle</h3><div class="preference-list"><label><span><strong>E-Mail</strong><small>Sendet ausgewählte Ereignisse an deine E-Mail-Adresse</small></span><input v-model="preferences.email_enabled" type="checkbox" /></label><label><span><strong>Web Push</strong><small>{{ permission === 'granted' ? 'In diesem Browser erlaubt' : 'Browserfreigabe erforderlich' }}</small></span><input v-model="preferences.push_enabled" type="checkbox" :disabled="permission !== 'granted'" /></label></div>
       <div v-if="pushDevices.length" class="push-devices"><h3>Push-Geräte</h3><div v-for="device in pushDevices" :key="device.id"><span><strong>{{ device.device_name }}</strong><small>Hinzugefügt {{ formatDateTime(device.created_at) }}</small></span><button class="link-button danger-text" type="button" @click="removePushDevice(device)">Entfernen</button></div></div>
       <button v-if="permission !== 'granted' || !pushDevices.length" class="button button-secondary button-wide" type="button" @click="enablePush">Web Push auf diesem Gerät aktivieren</button><button class="button button-primary button-wide" type="button" :disabled="savingPreferences" @click="savePreferences">{{ savingPreferences ? 'Speichert …' : 'Präferenzen speichern' }}</button>
     </aside>

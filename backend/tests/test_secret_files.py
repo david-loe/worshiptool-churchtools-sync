@@ -72,12 +72,6 @@ def _plain(value):
             "first pem line\nsecond pem line",
         ),
         (
-            "WT_SYNC_TELEGRAM_BOT_TOKEN_FILE",
-            "telegram_bot_token",
-            b"telegram-token\n",
-            "telegram-token",
-        ),
-        (
             "WT_SYNC_BOOTSTRAP_ADMIN_PASSWORD_FILE",
             "bootstrap_admin_password",
             b"bootstrap password\n",

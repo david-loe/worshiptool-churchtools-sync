@@ -343,7 +343,6 @@ onBeforeUnmount(() => { if (previewPollTimer) window.clearTimeout(previewPollTim
           <label class="span-2 check-card"><input v-model="profile.create_missing_songs" type="checkbox" /><span><strong>Fehlende Songs automatisch anlegen</strong><small>Neue Songs werden in ChurchTools mit einem Standard-Arrangement angelegt.</small></span></label>
           <label v-if="profile.create_missing_songs"><span>ChurchTools-Songkategorie</span><select v-if="songCategories.length" v-model.number="profile.song_category_id" required><option :value="null" disabled>Auswählen …</option><option v-for="category in songCategories" :key="category.id" :value="Number(category.id)">{{ category.name }}</option></select><input v-else v-model.number="profile.song_category_id" type="number" min="1" required placeholder="Kategorie-ID" /></label>
           <label v-if="profile.create_missing_songs"><span>Arrangement-Name</span><input v-model="profile.arrangement_name" required maxlength="50" /></label>
-          <label class="span-2 check-card"><input v-model="profile.notification_preferences.email" type="checkbox" /><span><strong>E-Mail bei Problemen</strong><small>Erfolge werden standardmäßig nicht gemeldet.</small></span></label>
           <aside class="profile-configuration-note span-2">
             <strong>Aktuelle Platzierung</strong>
             <p>Events werden über ihre exakte Startzeit zugeordnet. Alle Songs landen nach dem ChurchTools-Header „Lobpreis“.</p>

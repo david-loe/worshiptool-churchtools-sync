@@ -82,14 +82,6 @@ export function newProfile(): SyncProfileInput {
       song_start: 0,
       song_end: null,
     }],
-    notification_preferences: {
-      in_app: true,
-      web_push: false,
-      email: true,
-      telegram: false,
-      notify_success: false,
-      notify_new_songs: true,
-    },
     create_missing_songs: true,
     song_category_id: null,
     arrangement_name: 'Standard-Arrangement',
@@ -108,7 +100,6 @@ export function sanitizeProfile(input: SyncProfileInput): SyncProfileInput {
   // plain data and response-only fields can never leak into a request.
   const result = cloneProfileInput(input)
   result.name = result.name.trim()
-  result.notification_preferences.in_app = true
   result.lookahead_days = Math.min(365, Math.max(1, Number(result.lookahead_days)))
   if (result.schedule_type === 'interval') {
     result.interval_minutes = Math.max(30, Number(result.interval_minutes ?? 60))
@@ -162,7 +153,6 @@ export function profileInputFromProfile(profile: SyncProfile): SyncProfileInput 
     cron_expression: profile.cron_expression,
     event_rules: profile.event_rules,
     placements: profile.placements,
-    notification_preferences: profile.notification_preferences,
     create_missing_songs: profile.create_missing_songs,
     song_category_id: profile.song_category_id,
     arrangement_name: profile.arrangement_name,
@@ -182,7 +172,6 @@ function cloneProfileInput(input: SyncProfileInput): SyncProfileInput {
       ...placement,
       anchor: { ...placement.anchor },
     })),
-    notification_preferences: { ...input.notification_preferences },
     agenda_item_defaults: { ...input.agenda_item_defaults },
   }
 }

@@ -5,6 +5,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from sqlalchemy import func, select
 
 from app.models import (
@@ -390,7 +391,6 @@ def test_run_fanout_respects_preferences_and_push_payload_shape(
         run_id=run.id,
         data={"event_plan_id": "event-plan-1"},
         deduplication_key="push-event-link",
-        channel_policy={"email": False, "web_push": True},
     )
     db.commit()
     event_sender = RecordingSender()
@@ -403,24 +403,16 @@ def test_run_fanout_respects_preferences_and_push_payload_shape(
     )
 
 
-def test_profile_channel_policy_suppresses_external_delivery_but_keeps_in_app(
+def test_user_channel_preferences_suppress_external_delivery_but_keep_in_app(
     db, settings
 ):
     user, workspace, profile = _tenant_graph(db)
-    profile.notification_preferences = {
-        "in_app": True,
-        "email": False,
-        "web_push": False,
-        "telegram": False,
-        "notify_success": False,
-        "notify_new_songs": True,
-    }
     db.add(
         NotificationPreference(
             workspace_id=workspace.id,
             user_id=user.id,
-            email_enabled=True,
-            push_enabled=True,
+            email_enabled=False,
+            push_enabled=False,
         )
     )
     run = SyncRun(
@@ -440,16 +432,73 @@ def test_profile_channel_policy_suppresses_external_delivery_but_keeps_in_app(
     assert db.scalar(select(func.count()).select_from(NotificationOutbox)) == 0
 
 
+@pytest.mark.parametrize(
+    ("status", "failure_enabled", "expected"),
+    [
+        (SyncRunStatus.FAILED, True, 1),
+        (SyncRunStatus.PARTIAL, True, 1),
+        (SyncRunStatus.CANCELED, True, 1),
+        (SyncRunStatus.FAILED, False, 0),
+        (SyncRunStatus.SKIPPED, True, 0),
+    ],
+)
+def test_run_fanout_maps_terminal_statuses_to_user_events(
+    db, settings, status, failure_enabled, expected
+):
+    user, workspace, profile = _tenant_graph(db)
+    db.add(
+        NotificationPreference(
+            workspace_id=workspace.id,
+            user_id=user.id,
+            email_enabled=False,
+            success_notifications=False,
+            failure_notifications=failure_enabled,
+        )
+    )
+    run = SyncRun(
+        workspace_id=workspace.id,
+        profile_id=profile.id,
+        config_revision=1,
+        status=status,
+        trigger=SyncTrigger.SCHEDULED,
+        finished_at=datetime.now(timezone.utc),
+    )
+    db.add(run)
+    db.flush()
+
+    assert NotificationService(db, settings).fanout_run(run) == expected
+    assert db.scalar(select(func.count()).select_from(Notification)) == expected
+
+
+@pytest.mark.parametrize(("enabled", "expected"), [(False, 0), (True, 1)])
+def test_successful_run_notifications_follow_user_event_preference(
+    db, settings, enabled, expected
+):
+    user, workspace, profile = _tenant_graph(db)
+    db.add(
+        NotificationPreference(
+            workspace_id=workspace.id,
+            user_id=user.id,
+            email_enabled=False,
+            success_notifications=enabled,
+        )
+    )
+    run = SyncRun(
+        workspace_id=workspace.id,
+        profile_id=profile.id,
+        config_revision=1,
+        status=SyncRunStatus.SUCCEEDED,
+        trigger=SyncTrigger.SCHEDULED,
+        finished_at=datetime.now(timezone.utc),
+    )
+    db.add(run)
+    db.flush()
+
+    assert NotificationService(db, settings).fanout_run(run) == expected
+
+
 def test_fanout_reports_verified_new_songs_separately(db, settings):
     user, workspace, profile = _tenant_graph(db)
-    profile.notification_preferences = {
-        "in_app": True,
-        "email": False,
-        "web_push": False,
-        "telegram": False,
-        "notify_success": False,
-        "notify_new_songs": True,
-    }
     run = SyncRun(
         workspace_id=workspace.id,
         profile_id=profile.id,
@@ -478,16 +527,43 @@ def test_fanout_reports_verified_new_songs_separately(db, settings):
     assert categories == ["new_songs", "sync_run"]
 
 
+def test_new_song_event_preference_suppresses_song_notification(db, settings):
+    user, workspace, profile = _tenant_graph(db)
+    db.add(
+        NotificationPreference(
+            workspace_id=workspace.id,
+            user_id=user.id,
+            email_enabled=False,
+            failure_notifications=True,
+            new_song_notifications=False,
+        )
+    )
+    run = SyncRun(
+        workspace_id=workspace.id,
+        profile_id=profile.id,
+        config_revision=1,
+        status=SyncRunStatus.PARTIAL,
+        trigger=SyncTrigger.SCHEDULED,
+        finished_at=datetime.now(timezone.utc),
+    )
+    db.add(run)
+    db.flush()
+    db.add(
+        SyncAction(
+            run_id=run.id,
+            kind=SyncActionKind.CREATE_SONG,
+            status=SyncActionStatus.VERIFIED,
+            ordinal=0,
+        )
+    )
+    db.flush()
+
+    assert NotificationService(db, settings).fanout_run(run) == 1
+    assert db.scalars(select(Notification.category)).all() == ["sync_run"]
+
+
 def test_fanout_bundles_verified_new_songs_per_event(db, settings):
     _user, workspace, profile = _tenant_graph(db)
-    profile.notification_preferences = {
-        "in_app": True,
-        "email": False,
-        "web_push": False,
-        "telegram": False,
-        "notify_success": False,
-        "notify_new_songs": True,
-    }
     run = SyncRun(
         workspace_id=workspace.id,
         profile_id=profile.id,

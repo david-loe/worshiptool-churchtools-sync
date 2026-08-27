@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
+from datetime import datetime, timezone
+import json
 
 import pytest
 from alembic import command
@@ -12,13 +14,16 @@ from sqlalchemy.orm import Session
 
 from app.database import Database, _enable_sqlite_foreign_keys
 from app.models import (
+    Membership,
     ProviderConnection,
     ProviderType,
     RemoteBinding,
     SyncProfile,
     SyncRun,
     SyncTrigger,
+    User,
     Workspace,
+    WorkspaceRole,
 )
 
 
@@ -69,6 +74,80 @@ def _profile(
         source_connection_id=source.id,
         target_connection_id=target.id,
         name=name,
+    )
+
+
+def _insert_legacy_profile(
+    db: Session,
+    workspace: Workspace,
+    source: ProviderConnection,
+    target: ProviderConnection,
+    name: str,
+    notification_preferences: dict[str, bool] | None = None,
+) -> uuid.UUID:
+    profile_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
+    db.execute(
+        text(
+            "INSERT INTO sync_profiles "
+            "(id, workspace_id, source_connection_id, target_connection_id, name, "
+            "enabled, revision, match_mode, source_timezone, target_timezone, "
+            "lookahead_days, schedule_type, interval_minutes, event_rules, placements, "
+            "notification_preferences, create_missing_songs, arrangement_name, "
+            "agenda_item_defaults, created_at, updated_at) VALUES "
+            "(:id, :workspace_id, :source_id, :target_id, :name, 0, 1, "
+            "'exact_time', 'UTC', 'UTC', 28, 'interval', 60, :event_rules, "
+            ":placements, :notification_preferences, 1, 'Standard-Arrangement', "
+            ":agenda_item_defaults, :created_at, :updated_at)"
+        ),
+        {
+            "id": profile_id.hex,
+            "workspace_id": workspace.id.hex,
+            "source_id": source.id.hex,
+            "target_id": target.id.hex,
+            "name": name,
+            "event_rules": json.dumps([]),
+            "placements": json.dumps([]),
+            "notification_preferences": json.dumps(
+                notification_preferences or {}
+            ),
+            "agenda_item_defaults": json.dumps({}),
+            "created_at": now.isoformat(),
+            "updated_at": now.isoformat(),
+        },
+    )
+    return profile_id
+
+
+def _insert_legacy_notification_preference(
+    db: Session,
+    workspace: Workspace,
+    user: User,
+    *,
+    email_enabled: bool,
+    push_enabled: bool,
+    success_notifications: bool,
+) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    db.execute(
+        text(
+            "INSERT INTO notification_preferences "
+            "(id, workspace_id, user_id, in_app_enabled, push_enabled, "
+            "email_enabled, success_notifications, telegram_enabled, "
+            "created_at, updated_at) VALUES "
+            "(:id, :workspace_id, :user_id, 1, :push_enabled, "
+            ":email_enabled, :success_notifications, 0, :created_at, :updated_at)"
+        ),
+        {
+            "id": uuid.uuid4().hex,
+            "workspace_id": workspace.id.hex,
+            "user_id": user.id.hex,
+            "push_enabled": push_enabled,
+            "email_enabled": email_enabled,
+            "success_notifications": success_notifications,
+            "created_at": now,
+            "updated_at": now,
+        },
     )
 
 
@@ -184,7 +263,7 @@ def test_fresh_sqlite_migration_installs_and_reverses_tenant_foreign_keys(
         _assert_seed_preserved(engine, seeded)
         with engine.connect() as connection:
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-                "20260827_0015"
+                "20260827_0016"
             )
             assert connection.scalar(
                 text("SELECT manual_run_cooldown_seconds FROM workspaces")
@@ -222,6 +301,163 @@ def test_fresh_sqlite_migration_installs_and_reverses_tenant_foreign_keys(
         engine.dispose()
 
 
+def test_notification_preference_migration_unions_profiles_and_preserves_user_vetoes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database_url, config = _migration_config(
+        tmp_path / "notification-preferences.sqlite3", monkeypatch
+    )
+    command.upgrade(config, "20260827_0015")
+    engine = create_engine(database_url)
+    try:
+        with Session(engine) as db:
+            workspace = Workspace(name="Notify", slug="notify-migration")
+            enabled_user = User(
+                email="enabled@example.org",
+                normalized_email="enabled@example.org",
+                password_hash="not-used",
+            )
+            opted_out_user = User(
+                email="disabled@example.org",
+                normalized_email="disabled@example.org",
+                password_hash="not-used",
+            )
+            db.add_all([workspace, enabled_user, opted_out_user])
+            db.flush()
+            db.add_all(
+                [
+                    Membership(
+                        workspace_id=workspace.id,
+                        user_id=enabled_user.id,
+                        role=WorkspaceRole.OWNER,
+                    ),
+                    Membership(
+                        workspace_id=workspace.id,
+                        user_id=opted_out_user.id,
+                        role=WorkspaceRole.VIEWER,
+                    ),
+                ]
+            )
+            source, target = _connections(workspace, "Notify")
+            db.add_all([source, target])
+            db.flush()
+            _insert_legacy_profile(
+                db,
+                workspace,
+                source,
+                target,
+                "Restrictive",
+                {
+                    "email": False,
+                    "web_push": False,
+                    "notify_success": False,
+                    "notify_new_songs": False,
+                },
+            )
+            _insert_legacy_profile(
+                db,
+                workspace,
+                source,
+                target,
+                "Permissive",
+                {
+                    "email": True,
+                    "web_push": True,
+                    "notify_success": True,
+                    "notify_new_songs": False,
+                },
+            )
+            _insert_legacy_notification_preference(
+                db,
+                workspace,
+                enabled_user,
+                email_enabled=True,
+                push_enabled=True,
+                success_notifications=True,
+            )
+            _insert_legacy_notification_preference(
+                db,
+                workspace,
+                opted_out_user,
+                email_enabled=False,
+                push_enabled=False,
+                success_notifications=False,
+            )
+            now = datetime.now(timezone.utc).isoformat()
+            db.execute(
+                text(
+                    "INSERT INTO notification_outbox "
+                    "(id, workspace_id, channel, recipient, payload_encrypted, "
+                    "idempotency_key, status, attempts, created_at, next_attempt_at) "
+                    "VALUES (:id, :workspace_id, 'telegram', 'chat', 'payload', "
+                    "'legacy-telegram', 'pending', 0, :created_at, :next_attempt_at)"
+                ),
+                {
+                    "id": uuid.uuid4().hex,
+                    "workspace_id": workspace.id.hex,
+                    "created_at": now,
+                    "next_attempt_at": now,
+                },
+            )
+            db.commit()
+            enabled_id = enabled_user.id.hex
+            opted_out_id = opted_out_user.id.hex
+    finally:
+        engine.dispose()
+
+    command.upgrade(config, "head")
+    engine = create_engine(database_url)
+    try:
+        inspector = inspect(engine)
+        assert "notification_preferences" not in {
+            column["name"] for column in inspector.get_columns("sync_profiles")
+        }
+        preference_columns = {
+            column["name"]
+            for column in inspector.get_columns("notification_preferences")
+        }
+        assert {"failure_notifications", "new_song_notifications"} <= (
+            preference_columns
+        )
+        assert {"in_app_enabled", "telegram_enabled"}.isdisjoint(
+            preference_columns
+        )
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    "SELECT user_id, email_enabled, push_enabled, "
+                    "success_notifications, failure_notifications, "
+                    "new_song_notifications FROM notification_preferences"
+                )
+            ).mappings()
+            preferences = {row["user_id"]: row for row in rows}
+            enabled = preferences[enabled_id]
+            assert all(
+                bool(enabled[field])
+                for field in (
+                    "email_enabled",
+                    "push_enabled",
+                    "success_notifications",
+                    "failure_notifications",
+                )
+            )
+            assert not bool(enabled["new_song_notifications"])
+            opted_out = preferences[opted_out_id]
+            assert not bool(opted_out["email_enabled"])
+            assert not bool(opted_out["push_enabled"])
+            assert not bool(opted_out["success_notifications"])
+            assert bool(opted_out["failure_notifications"])
+            assert not bool(opted_out["new_song_notifications"])
+            assert connection.scalar(
+                text(
+                    "SELECT COUNT(*) FROM notification_outbox "
+                    "WHERE channel = 'telegram'"
+                )
+            ) == 0
+    finally:
+        engine.dispose()
+
+
 def test_migration_refuses_existing_cross_workspace_references(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -242,7 +478,9 @@ def test_migration_refuses_existing_cross_workspace_references(
             db.flush()
             # Revision 0008 has only the legacy ID-only FK, so this is valid in
             # the old schema and represents the corruption 0009 must not hide.
-            db.add(_profile(first, source_second, target_first, "Cross tenant"))
+            _insert_legacy_profile(
+                db, first, source_second, target_first, "Cross tenant"
+            )
             db.commit()
     finally:
         engine.dispose()
@@ -281,18 +519,18 @@ def _seed_valid_graph(engine) -> dict[str, str]:
         source, target = _connections(workspace, "Seed")
         db.add_all([source, target])
         db.flush()
-        profile = _profile(workspace, source, target, "Seed profile")
-        db.add(profile)
-        db.flush()
+        profile_id = _insert_legacy_profile(
+            db, workspace, source, target, "Seed profile"
+        )
         run = SyncRun(
             workspace_id=workspace.id,
-            profile_id=profile.id,
+            profile_id=profile_id,
             config_revision=1,
             trigger=SyncTrigger.MANUAL,
         )
         binding = RemoteBinding(
             workspace_id=workspace.id,
-            profile_id=profile.id,
+            profile_id=profile_id,
             target_connection_id=target.id,
             target_event_id="seed-event",
             agenda_item_id="seed-item",
@@ -302,7 +540,7 @@ def _seed_valid_graph(engine) -> dict[str, str]:
         db.add_all([run, binding])
         db.flush()
         seeded = {
-            "profile_id": str(profile.id),
+            "profile_id": str(profile_id),
             "run_id": str(run.id),
             "binding_id": str(binding.id),
         }

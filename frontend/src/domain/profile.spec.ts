@@ -36,8 +36,6 @@ describe('Profilmodell', () => {
       sync_mode: 'source_changes_only',
       match_mode: 'exact_time',
     })
-    expect(profile.notification_preferences.notify_success).toBe(false)
-    expect(profile.notification_preferences.telegram).toBe(false)
     expect(profile.agenda_item_defaults).toEqual({
       title: null,
       note: null,
@@ -66,14 +64,12 @@ describe('Profilmodell', () => {
     const profile = newProfile()
     profile.name = '  Sonntags  '
     profile.interval_minutes = 10
-    profile.notification_preferences.in_app = false
     profile.event_rules[0]!.name_regex = '  '
 
     const result = sanitizeProfile(profile)
 
     expect(result.name).toBe('Sonntags')
     expect(result.interval_minutes).toBe(30)
-    expect(result.notification_preferences.in_app).toBe(true)
     expect(result.event_rules[0]!.name_regex).toBeUndefined()
   })
 

@@ -126,11 +126,11 @@ def get_preferences(
     preference = _preference(access, db)
     if preference is None:
         return NotificationPreferenceOut(
-            in_app_enabled=True,
             push_enabled=False,
             email_enabled=True,
             success_notifications=False,
-            telegram_enabled=False,
+            failure_notifications=True,
+            new_song_notifications=True,
         )
     return NotificationPreferenceOut.model_validate(preference)
 

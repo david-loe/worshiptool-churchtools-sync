@@ -19,8 +19,8 @@
 
 ## Secrets and logs
 
-- Provider credentials are write-only API values. SMTP, VAPID and optional
-  Telegram secrets are injected only into the worker container.
+- Provider credentials are write-only API values. SMTP and VAPID secrets are
+  injected only into the worker container.
 - Provider connection secrets are encrypted with AES-GCM and a versioned master
   key supplied as a runtime secret. The database never contains that master key.
 - API responses and persisted errors use classified, redacted error codes;
@@ -36,8 +36,7 @@ variables are
 `WT_SYNC_REDIS_URL_FILE`, `WT_SYNC_APPLICATION_SECRET_FILE`,
 `WT_SYNC_ENCRYPTION_SECRET_FILE`,
 `WT_SYNC_ENCRYPTION_PREVIOUS_SECRETS_FILE`,
-`WT_SYNC_SMTP_PASSWORD_FILE`, `WT_SYNC_VAPID_PRIVATE_KEY_FILE`,
-`WT_SYNC_TELEGRAM_BOT_TOKEN_FILE` and
+`WT_SYNC_SMTP_PASSWORD_FILE`, `WT_SYNC_VAPID_PRIVATE_KEY_FILE` and
 `WT_SYNC_BOOTSTRAP_ADMIN_PASSWORD_FILE`. For example, use
 `WT_SYNC_APPLICATION_SECRET_FILE=/run/secrets/application_secret`.
 

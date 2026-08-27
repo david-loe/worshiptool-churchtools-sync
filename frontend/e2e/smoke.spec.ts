@@ -20,7 +20,6 @@ const profile = {
   next_scheduled_at: null,
   event_rules: [],
   placements: [],
-  notification_preferences: { in_app: true, web_push: true, email: true, telegram: false, notify_success: false, notify_new_songs: true },
   create_missing_songs: true,
   song_category_id: 4,
   arrangement_name: 'Standard-Arrangement',
@@ -159,11 +158,11 @@ test('einzelne Benachrichtigung ist per Tastatur als gelesen markierbar', async 
       return json(route, { ...notification, read_at: '2026-01-01T10:05:00Z' })
     }
     if (path.endsWith('/notifications/preferences')) {
-      return json(route, { in_app_enabled: true, email_enabled: true, push_enabled: false, telegram_enabled: false, success_notifications: false })
+      return json(route, { email_enabled: true, push_enabled: false, success_notifications: false, failure_notifications: true, new_song_notifications: true })
     }
     if (path.endsWith('/notifications/push-subscriptions')) return json(route, [])
     if (path.endsWith('/notifications')) {
-      return json(route, { items: [notification], total: 1, unread: 1, limit: 100, offset: 0 })
+      return json(route, { items: [notification], total: 1, unread: 1, limit: 20, offset: 0 })
     }
     return json(route, { title: 'Nicht gefunden', status: 404 }, 404)
   })
@@ -174,6 +173,53 @@ test('einzelne Benachrichtigung ist per Tastatur als gelesen markierbar', async 
   await markButton.press('Enter')
   await expect(markButton).toHaveCount(0)
   expect(markedRead).toBe(true)
+})
+
+test('Benachrichtigungen werden mit höchstens 20 Einträgen paginiert', async ({ page }) => {
+  const notifications = Array.from({ length: 25 }, (_, index) => ({
+    id: `notification-${index + 1}`,
+    workspace_id: workspace.id,
+    user_id: user.id,
+    severity: 'info',
+    category: 'sync_run',
+    title: `Benachrichtigung ${index + 1}`,
+    body: 'Testnachricht',
+    data: {},
+    read_at: null,
+    created_at: `2026-01-01T10:${String(index).padStart(2, '0')}:00Z`,
+    run_id: null,
+    profile_id: profile.id,
+  }))
+  const requestedPages: Array<{ limit: string | null, offset: string | null }> = []
+  await page.route('**/api/v1/**', async (route) => {
+    const url = new URL(route.request().url())
+    const path = url.pathname
+    if (path.endsWith('/auth/me')) return json(route, user)
+    if (path.endsWith('/workspaces')) return json(route, { items: [workspace], total: 1, limit: 50, offset: 0 })
+    if (path.endsWith('/notifications/preferences')) {
+      return json(route, { email_enabled: true, push_enabled: false, success_notifications: false, failure_notifications: true, new_song_notifications: true })
+    }
+    if (path.endsWith('/notifications/push-subscriptions')) return json(route, [])
+    if (path.endsWith('/notifications')) {
+      const limit = Number(url.searchParams.get('limit'))
+      const offset = Number(url.searchParams.get('offset'))
+      requestedPages.push({ limit: url.searchParams.get('limit'), offset: url.searchParams.get('offset') })
+      return json(route, { items: notifications.slice(offset, offset + limit), total: notifications.length, unread: notifications.length, limit, offset })
+    }
+    return json(route, { title: 'Nicht gefunden', status: 404 }, 404)
+  })
+
+  await page.goto('/notifications')
+  await expect(page.locator('.notification-list > li')).toHaveCount(20)
+  await expect(page.getByText('Seite 1 von 2')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Ereignisse' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Kanäle' })).toBeVisible()
+  await expect(page.getByText('Telegram')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Weiter' }).click()
+  await expect(page.locator('.notification-list > li')).toHaveCount(5)
+  await expect(page.getByText('Seite 2 von 2')).toBeVisible()
+  expect(requestedPages).toContainEqual({ limit: '20', offset: '0' })
+  expect(requestedPages).toContainEqual({ limit: '20', offset: '20' })
 })
 
 test('persistierter Lauf wird trotz Queue-503 geöffnet', async ({ page }) => {

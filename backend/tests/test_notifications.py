@@ -10,16 +10,20 @@ from app.main import create_app
 from app.models import (
     Membership,
     Notification,
+    NotificationPreference,
     NotificationSeverity,
     User,
     Workspace,
     WorkspaceRole,
 )
 from app.routers.notifications import (
+    get_preferences,
     list_notifications,
     mark_all_read,
     router as notifications_router,
+    update_preferences,
 )
+from app.schemas import NotificationPreferenceUpdate
 
 
 def _user(email: str) -> User:
@@ -166,3 +170,40 @@ def test_mark_all_read_openapi_contract_and_csrf_dependency(settings, database):
     assert response_schema["$ref"].endswith("/NotificationMarkAllReadResponse")
     assert "requestBody" not in operation
     assert "application/problem+json" in operation["responses"]["default"]["content"]
+
+
+def test_notification_preferences_default_and_update_contract(db):
+    current_user = _user("preferences@example.org")
+    workspace = Workspace(name="Präferenzen", slug="praeferenzen")
+    db.add_all([current_user, workspace])
+    db.flush()
+    access = WorkspaceAccess(workspace, current_user, WorkspaceRole.OWNER)
+
+    defaults = get_preferences(access, db)
+    assert defaults.model_dump() == {
+        "push_enabled": False,
+        "email_enabled": True,
+        "success_notifications": False,
+        "failure_notifications": True,
+        "new_song_notifications": True,
+    }
+
+    updated = update_preferences(
+        NotificationPreferenceUpdate(
+            push_enabled=True,
+            email_enabled=False,
+            success_notifications=True,
+            failure_notifications=False,
+            new_song_notifications=False,
+        ),
+        access,
+        db,
+        None,
+    )
+
+    assert isinstance(updated, NotificationPreference)
+    assert updated.push_enabled is True
+    assert updated.email_enabled is False
+    assert updated.success_notifications is True
+    assert updated.failure_notifications is False
+    assert updated.new_song_notifications is False

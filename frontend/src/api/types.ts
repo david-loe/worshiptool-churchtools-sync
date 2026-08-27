@@ -144,21 +144,12 @@ export interface PlacementRules {
   song_end: number | null
 }
 
-export interface NotificationPreferences {
-  in_app: boolean
-  web_push: boolean
-  email: boolean
-  telegram: boolean
-  notify_success: boolean
-  notify_new_songs: boolean
-}
-
 export interface UserNotificationPreferences {
-  in_app_enabled: boolean
   push_enabled: boolean
   email_enabled: boolean
   success_notifications: boolean
-  telegram_enabled: boolean
+  failure_notifications: boolean
+  new_song_notifications: boolean
 }
 
 export interface PushSubscriptionDevice {
@@ -187,7 +178,6 @@ export interface SyncProfile {
   next_scheduled_at: string | null
   event_rules: EventRules[]
   placements: PlacementRules[]
-  notification_preferences: NotificationPreferences
   create_missing_songs: boolean
   song_category_id: number | null
   arrangement_name: string

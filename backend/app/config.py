@@ -31,7 +31,6 @@ _FILE_BACKED_FIELDS = {
     "encryption_previous_secrets": "encryption_previous_secrets_file",
     "smtp_password": "smtp_password_file",
     "vapid_private_key": "vapid_private_key_file",
-    "telegram_bot_token": "telegram_bot_token_file",
     "bootstrap_admin_password": "bootstrap_admin_password_file",
 }
 
@@ -213,14 +212,6 @@ class Settings(BaseSettings):
             "web.push.apple.com",
         ]
     )
-    telegram_enabled: bool = False
-    telegram_bot_token: SecretStr | None = None
-    telegram_bot_token_file: Path | None = Field(
-        default=None, exclude=True, repr=False
-    )
-    telegram_chat_id: str | None = None
-    telegram_workspace_id: uuid.UUID | None = None
-
     outbox_batch_size: int = Field(default=10, ge=1, le=50)
     outbox_max_attempts: int = Field(default=8, ge=1, le=25)
     outbox_lease_seconds: int = Field(default=300, ge=120, le=3600)
@@ -355,9 +346,6 @@ class Settings(BaseSettings):
         "vapid_public_key",
         "vapid_private_key",
         "vapid_subject",
-        "telegram_bot_token",
-        "telegram_chat_id",
-        "telegram_workspace_id",
         mode="before",
     )
     @classmethod

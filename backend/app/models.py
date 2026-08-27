@@ -350,9 +350,6 @@ class SyncProfile(TimestampMixin, Base):
     cron_expression: Mapped[str | None] = mapped_column(String(120))
     event_rules: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
     placements: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
-    notification_preferences: Mapped[dict[str, Any]] = mapped_column(
-        JSON, default=dict, nullable=False
-    )
     create_missing_songs: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     song_category_id: Mapped[int | None] = mapped_column(Integer)
     arrangement_name: Mapped[str] = mapped_column(
@@ -595,11 +592,11 @@ class NotificationPreference(TimestampMixin, Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
     )
-    in_app_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     push_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     email_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     success_notifications: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    telegram_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    failure_notifications: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    new_song_notifications: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
 class PushSubscription(Base):

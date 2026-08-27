@@ -439,17 +439,6 @@ class PlacementConfig(APIRequest):
     )
 
 
-class ProfileNotificationConfig(APIRequest):
-    """Workspace-profile policy, combined with each user's channel opt-ins."""
-
-    in_app: Literal[True] = True
-    web_push: bool = True
-    email: bool = True
-    telegram: bool = False
-    notify_success: bool = False
-    notify_new_songs: bool = True
-
-
 class AgendaItemDefaults(APIRequest):
     """Optional overrides sent for every managed ChurchTools song item."""
 
@@ -476,9 +465,6 @@ class ProfileCreate(APIRequest):
     cron_expression: str | None = Field(default=None, max_length=120)
     event_rules: list[EventSelectorConfig] = Field(default_factory=list, max_length=100)
     placements: list[PlacementConfig] = Field(default_factory=list, max_length=100)
-    notification_preferences: ProfileNotificationConfig = Field(
-        default_factory=ProfileNotificationConfig
-    )
     create_missing_songs: bool = True
     song_category_id: int | None = Field(default=None, ge=1)
     arrangement_name: str = Field(
@@ -528,7 +514,6 @@ class ProfileUpdate(APIRequest):
     cron_expression: str | None = Field(default=None, max_length=120)
     event_rules: list[EventSelectorConfig] | None = Field(default=None, max_length=100)
     placements: list[PlacementConfig] | None = Field(default=None, max_length=100)
-    notification_preferences: ProfileNotificationConfig | None = None
     create_missing_songs: bool | None = None
     song_category_id: int | None = Field(default=None, ge=1)
     arrangement_name: str | None = Field(default=None, min_length=2, max_length=50)
@@ -560,7 +545,6 @@ class ProfileUpdate(APIRequest):
             "schedule_type",
             "event_rules",
             "placements",
-            "notification_preferences",
             "create_missing_songs",
             "arrangement_name",
         }
@@ -595,7 +579,6 @@ class ProfileOut(ORMModel):
     next_scheduled_at: datetime | None
     event_rules: list[EventSelectorConfig]
     placements: list[PlacementConfig]
-    notification_preferences: ProfileNotificationConfig
     create_missing_songs: bool
     song_category_id: int | None
     arrangement_name: str
@@ -611,14 +594,6 @@ class ProfileOut(ORMModel):
     @classmethod
     def canonicalize_legacy_event_rules(cls, value: Any) -> list[dict[str, Any]]:
         return canonicalize_persisted_event_rules(value)
-
-    @field_validator("notification_preferences", mode="before")
-    @classmethod
-    def enforce_canonical_in_app_notifications(cls, value: Any) -> Any:
-        if isinstance(value, dict):
-            return {**value, "in_app": True}
-        return value
-
 
 class ProfileList(BaseModel):
     items: list[ProfileOut]
@@ -764,28 +739,19 @@ class NotificationMarkAllReadResponse(BaseModel):
 
 
 class NotificationPreferenceUpdate(APIRequest):
-    in_app_enabled: Literal[True] = True
     push_enabled: bool = False
     email_enabled: bool = True
     success_notifications: bool = False
-    telegram_enabled: bool = Field(
-        default=False,
-        description="Veralteter Kanal; standardmäßig deaktiviert.",
-        deprecated=True,
-    )
+    failure_notifications: bool = True
+    new_song_notifications: bool = True
 
 
 class NotificationPreferenceOut(ORMModel):
-    in_app_enabled: Literal[True]
     push_enabled: bool
     email_enabled: bool
     success_notifications: bool
-    telegram_enabled: bool
-
-    @field_validator("in_app_enabled", mode="before")
-    @classmethod
-    def enforce_canonical_in_app_notifications(cls, value: Any) -> bool:
-        return True
+    failure_notifications: bool
+    new_song_notifications: bool
 
 
 class PushSubscriptionCreate(APIRequest):

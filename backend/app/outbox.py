@@ -13,7 +13,6 @@ from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from typing import Any, Callable, Mapping, Protocol
 
-import httpx
 from pywebpush import WebPushException, webpush
 from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
@@ -75,10 +74,6 @@ class PushSender(Protocol):
     def send(
         self, subscription: Mapping[str, Any], payload: Mapping[str, Any]
     ) -> None: ...
-
-
-class TelegramSender(Protocol):
-    def send(self, recipient: str, payload: Mapping[str, Any]) -> None: ...
 
 
 class SmtpEmailSender:
@@ -188,34 +183,6 @@ class VapidPushSender:
             raise DeliveryError("push_delivery_failed") from exc
         except (OSError, TimeoutError, ValueError) as exc:
             raise DeliveryError("push_delivery_failed") from exc
-
-
-class LegacyTelegramSender:
-    """Deprecated compatibility channel; disabled unless explicitly configured."""
-
-    def __init__(self, settings: Settings):
-        self.settings = settings
-
-    def send(self, recipient: str, payload: Mapping[str, Any]) -> None:
-        if not self.settings.telegram_enabled or self.settings.telegram_bot_token is None:
-            raise DeliveryError("telegram_disabled", permanent=True)
-        text = f"{payload.get('title', 'Worship Sync')}\n\n{payload.get('body', '')}"[:4000]
-        try:
-            response = httpx.post(
-                "https://api.telegram.org/bot"
-                + self.settings.telegram_bot_token.get_secret_value()
-                + "/sendMessage",
-                json={"chat_id": recipient, "text": text},
-                timeout=10.0,
-            )
-            if response.status_code == 429 or response.status_code >= 500:
-                raise DeliveryError("telegram_temporarily_unavailable")
-            if response.status_code >= 400:
-                raise DeliveryError("telegram_request_rejected", permanent=True)
-        except DeliveryError:
-            raise
-        except (httpx.HTTPError, OSError, TimeoutError) as exc:
-            raise DeliveryError("telegram_delivery_failed") from exc
 
 
 def enqueue_outbox(
@@ -339,7 +306,6 @@ class NotificationService:
         deduplication_key: str,
         run_id: uuid.UUID | None = None,
         data: Mapping[str, Any] | None = None,
-        channel_policy: Mapping[str, bool] | None = None,
     ) -> Notification:
         existing = self.db.scalar(
             select(Notification).where(
@@ -362,16 +328,12 @@ class NotificationService:
         self.db.add(notification)
         self.db.flush()
         preference = self.preference(workspace_id, user.id)
-        policy = channel_policy or {}
         email_enabled = (
             preference.email_enabled if preference is not None else True
-        ) and policy.get("email", True)
+        )
         push_enabled = (
             preference.push_enabled if preference is not None else False
-        ) and policy.get("web_push", True)
-        telegram_enabled = (
-            preference.telegram_enabled if preference is not None else False
-        ) and policy.get("telegram", False)
+        )
         if email_enabled:
             enqueue_outbox(
                 self.db,
@@ -426,22 +388,6 @@ class NotificationService:
                     workspace_id=workspace_id,
                     notification_id=notification.id,
                 )
-        if (
-            telegram_enabled
-            and self.settings.telegram_enabled
-            and self.settings.telegram_chat_id
-            and self.settings.telegram_workspace_id == workspace_id
-        ):
-            enqueue_outbox(
-                self.db,
-                self.settings,
-                channel="telegram",
-                recipient=self.settings.telegram_chat_id,
-                payload={"title": title, "body": body},
-                idempotency_key=f"notification:{notification.id}:telegram",
-                workspace_id=workspace_id,
-                notification_id=notification.id,
-            )
         return notification
 
     def fanout_run(self, run: SyncRun) -> int:
@@ -450,16 +396,6 @@ class NotificationService:
         profile = self.db.get(SyncProfile, run.profile_id)
         if profile is None:
             return 0
-        raw_profile_policy = profile.notification_preferences
-        profile_policy: dict[str, bool] = {
-            key: value
-            for key, value in (
-                raw_profile_policy.items()
-                if isinstance(raw_profile_policy, Mapping)
-                else ()
-            )
-            if isinstance(key, str) and isinstance(value, bool)
-        }
         labels = {
             SyncRunStatus.SUCCEEDED: (
                 NotificationSeverity.INFO,
@@ -515,14 +451,22 @@ class NotificationService:
         created = 0
         for user, _membership in members:
             preference = self.preference(run.workspace_id, user.id)
-            notify_run = not (
-                run.status == SyncRunStatus.SUCCEEDED
-                and (
-                    not profile_policy.get("notify_success", False)
-                    or preference is None
-                    or not preference.success_notifications
+            if run.status == SyncRunStatus.SUCCEEDED:
+                notify_run = bool(
+                    preference is not None and preference.success_notifications
                 )
-            )
+            elif run.status in {
+                SyncRunStatus.PARTIAL,
+                SyncRunStatus.FAILED,
+                SyncRunStatus.CANCELED,
+            }:
+                notify_run = (
+                    preference.failure_notifications
+                    if preference is not None
+                    else True
+                )
+            else:
+                notify_run = False
             if notify_run:
                 key = f"run:{run.id}:{run.status.value}:user:{user.id}"
                 before = self.db.scalar(
@@ -541,11 +485,13 @@ class NotificationService:
                         "status": run.status.value,
                     },
                     deduplication_key=key,
-                    channel_policy=profile_policy,
                 )
                 if before is None:
                     created += 1
-            if new_song_count and profile_policy.get("notify_new_songs", True):
+            notify_new_songs = (
+                preference.new_song_notifications if preference is not None else True
+            )
+            if new_song_count and notify_new_songs:
                 if can_group_songs:
                     for event in song_events:
                         key = f"run:{run.id}:new-songs:event:{event.id}:user:{user.id}"
@@ -580,7 +526,6 @@ class NotificationService:
                                 "songs_created": count,
                             },
                             deduplication_key=key,
-                            channel_policy=profile_policy,
                         )
                         if before is None:
                             created += 1
@@ -608,7 +553,6 @@ class NotificationService:
                             "songs_created": new_song_count,
                         },
                         deduplication_key=key,
-                        channel_policy=profile_policy,
                     )
                     if before is None:
                         created += 1
@@ -656,13 +600,11 @@ class OutboxConsumer:
         *,
         email_sender: EmailSender | None = None,
         push_sender: PushSender | None = None,
-        telegram_sender: TelegramSender | None = None,
     ):
         self.database = database
         self.settings = settings
         self.email_sender = email_sender or SmtpEmailSender(settings)
         self.push_sender = push_sender or VapidPushSender(settings)
-        self.telegram_sender = telegram_sender or LegacyTelegramSender(settings)
 
     def process_batch(
         self, *, now: datetime | None = None, limit: int | None = None
@@ -742,8 +684,6 @@ class OutboxConsumer:
                     )
                     assert envelope.push_subscription_id is not None
                     self._touch_push_subscription(envelope.push_subscription_id)
-                elif envelope.channel == "telegram":
-                    self.telegram_sender.send(envelope.recipient, envelope.payload)
                 else:
                     raise DeliveryError("unknown_delivery_channel", permanent=True)
             # Even when a heartbeat failed, the final token-checked UPDATE is

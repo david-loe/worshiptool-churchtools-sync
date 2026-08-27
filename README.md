@@ -40,7 +40,7 @@ Die Standard-Compose-Konfiguration reicht Secrets direkt aus der git-ignorierten
 verschiedene PostgreSQL-Passwörter und die dazu passenden Owner-, API-, Worker-
 und Admin-DSNs, außerdem Redis-URL, Application-Secret und Encryption-Secret.
 Das JSON-Objekt für alte Encryption-Keys ist normalerweise `{}`; ungenutzte
-SMTP-, VAPID- und Telegram-Werte dürfen leer sein. Passwörter nie als
+SMTP- und VAPID-Werte dürfen leer sein. Passwörter nie als
 Kommandozeilenargument eingeben, `.env` auf Modus `0600` beschränken und Werte
 möglichst aus einem geschützten Secret-Manager bereitstellen. Secret-Werte in
 Container-Umgebungen sind für Nutzer mit Docker-Daemon-Zugriff per Inspect

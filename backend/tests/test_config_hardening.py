@@ -167,9 +167,6 @@ def test_optional_delivery_settings_normalize_blank_env_values():
         vapid_public_key="",
         vapid_private_key=" ",
         vapid_subject="",
-        telegram_bot_token=" ",
-        telegram_chat_id="",
-        telegram_workspace_id=" ",
     )
 
     assert settings.smtp_host is None
@@ -178,9 +175,6 @@ def test_optional_delivery_settings_normalize_blank_env_values():
     assert settings.vapid_public_key is None
     assert settings.vapid_private_key is None
     assert settings.vapid_subject is None
-    assert settings.telegram_bot_token is None
-    assert settings.telegram_chat_id is None
-    assert settings.telegram_workspace_id is None
 
 
 @pytest.mark.parametrize(

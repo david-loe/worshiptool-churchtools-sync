@@ -19,7 +19,6 @@ from app.schemas import (
     ProviderConnectionSettings,
     ProviderMetadata,
     ProfileCreate,
-    ProfileNotificationConfig,
     ProfileUpdate,
     PushSubscriptionCreate,
     RecoveryConfirmRequest,
@@ -167,7 +166,6 @@ def test_provider_settings_are_typed_timezone_only_and_provider_specific():
         "schedule_type",
         "event_rules",
         "placements",
-        "notification_preferences",
         "create_missing_songs",
         "arrangement_name",
     ],
@@ -209,30 +207,30 @@ def test_auth_tokens_and_profile_collections_are_resource_bounded():
         )
 
 
-@pytest.mark.parametrize(
-    ("model", "payload"),
-    [
-        (ProfileNotificationConfig, {"in_app": False}),
-        (NotificationPreferenceUpdate, {"in_app_enabled": False}),
-    ],
-)
-def test_in_app_notifications_cannot_be_disabled(model, payload):
+@pytest.mark.parametrize("field", ["in_app_enabled", "telegram_enabled"])
+def test_removed_notification_channels_are_rejected(field):
     with pytest.raises(ValidationError):
-        model.model_validate(payload)
+        NotificationPreferenceUpdate.model_validate({field: False})
 
 
-def test_legacy_disabled_in_app_preference_is_normalized_on_output():
+def test_notification_preference_contract_separates_events_and_channels():
     preference = NotificationPreferenceOut.model_validate(
         {
-            "in_app_enabled": False,
             "push_enabled": False,
             "email_enabled": True,
             "success_notifications": False,
-            "telegram_enabled": False,
+            "failure_notifications": True,
+            "new_song_notifications": True,
         }
     )
 
-    assert preference.in_app_enabled is True
+    assert preference.model_dump() == {
+        "push_enabled": False,
+        "email_enabled": True,
+        "success_notifications": False,
+        "failure_notifications": True,
+        "new_song_notifications": True,
+    }
 
 
 def test_provider_metadata_has_a_closed_typed_contract():
