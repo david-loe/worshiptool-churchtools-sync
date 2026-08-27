@@ -85,7 +85,7 @@ self.addEventListener('fetch', (event: FetchEvent) => {
 })
 
 self.addEventListener('push', (event: PushEvent) => {
-  let payload: { title?: string; body?: string; data?: { url?: string }; tag?: string } = {}
+  let payload: { title?: string; body?: string; data?: { url?: string; event_plan_id?: string }; tag?: string } = {}
   try {
     payload = event.data?.json() ?? {}
   } catch {
@@ -98,6 +98,9 @@ self.addEventListener('push', (event: PushEvent) => {
     badge: '/favicon.svg',
     tag: payload.tag,
     data: { url: targetUrl },
+    actions: payload.data?.event_plan_id
+      ? [{ action: 'open-event', title: 'Zum Ereignis' }]
+      : undefined,
   }))
 })
 

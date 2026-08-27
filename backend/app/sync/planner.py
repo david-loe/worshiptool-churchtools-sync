@@ -15,6 +15,7 @@ from .models import (
     EventPlan,
     EventPlanStatus,
     IssueSeverity,
+    MultipleAnchorPolicy,
     Ownership,
     PlanIssue,
     PlannedAction,
@@ -290,12 +291,21 @@ class SyncPlanner:
             if target_event_id is not None
             else None
         )
+        snapshots = {
+            "source_event_name": match.source.name,
+            "source_event_starts_at": match.source.starts_at,
+            "target_event_name": match.target.name if match.target is not None else None,
+            "target_event_starts_at": (
+                match.target.starts_at if match.target is not None else None
+            ),
+        }
         if match.status is not EventPlanStatus.READY or match.target is None:
             return EventPlan(
                 id=event_plan_id,
                 source_event_id=match.source.id,
                 target_event_id=target_event_id,
                 status=match.status,
+                **snapshots,
                 source_fingerprint=source_fingerprint,
                 config_fingerprint=config_fingerprint,
                 issues=match.issues,
@@ -310,6 +320,7 @@ class SyncPlanner:
                 source_event_id=match.source.id,
                 target_event_id=match.target.id,
                 status=EventPlanStatus.AMBIGUOUS if ambiguous else EventPlanStatus.FAILED,
+                **snapshots,
                 source_fingerprint=source_fingerprint,
                 config_fingerprint=config_fingerprint,
                 issues=event_issues,
@@ -321,6 +332,7 @@ class SyncPlanner:
                 source_event_id=match.source.id,
                 target_event_id=match.target.id,
                 status=EventPlanStatus.SKIPPED,
+                **snapshots,
                 source_fingerprint=source_fingerprint,
                 config_fingerprint=config_fingerprint,
                 issues=(
@@ -337,6 +349,7 @@ class SyncPlanner:
                 source_event_id=match.source.id,
                 target_event_id=match.target.id,
                 status=EventPlanStatus.FAILED,
+                **snapshots,
                 initial_agenda_fingerprint=agenda.fingerprint,
                 source_fingerprint=source_fingerprint,
                 config_fingerprint=config_fingerprint,
@@ -358,6 +371,7 @@ class SyncPlanner:
             source_event_id=match.source.id,
             target_event_id=match.target.id,
             status=EventPlanStatus.FAILED if has_errors else EventPlanStatus.READY,
+            **snapshots,
             initial_agenda_fingerprint=agenda.fingerprint,
             source_fingerprint=source_fingerprint,
             config_fingerprint=config_fingerprint,
@@ -398,16 +412,42 @@ class SyncPlanner:
                 continue
             used_source_indexes.update(indexes)
             anchors = [item for item in items if _anchor_matches(placement.anchor, item)]
-            if len(anchors) != 1:
+            if not anchors:
+                issues.append(
+                    PlanIssue(
+                        "anchor_not_found",
+                        "Der Agenda-Anker wurde nicht gefunden",
+                        details={"placement_id": placement.id, "matches": []},
+                    )
+                )
+                continue
+            if len(anchors) > 1 and placement.multiple_anchor_policy is MultipleAnchorPolicy.FAIL:
                 issues.append(
                     PlanIssue(
                         "anchor_not_unique",
                         "Der Agenda-Anker wurde nicht eindeutig gefunden",
-                        details={"placement_id": placement.id, "matches": [item.id for item in anchors]},
+                        details={
+                            "placement_id": placement.id,
+                            "matches": [item.id for item in anchors],
+                        },
                     )
                 )
                 continue
-            anchor_index = items.index(anchors[0])
+            selected_anchor = anchors[0]
+            if len(anchors) > 1:
+                issues.append(
+                    PlanIssue(
+                        "anchor_multiple_first_selected",
+                        "Mehrere Agenda-Anker gefunden; der erste Treffer wird verwendet",
+                        severity=IssueSeverity.WARNING,
+                        details={
+                            "placement_id": placement.id,
+                            "matches": [item.id for item in anchors],
+                            "selected_anchor_id": selected_anchor.id,
+                        },
+                    )
+                )
+            anchor_index = items.index(selected_anchor)
             if placement.relation.value == "before":
                 cursor = anchor_index
             elif placement.relation.value == "after":

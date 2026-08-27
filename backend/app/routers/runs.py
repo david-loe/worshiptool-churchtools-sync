@@ -4,12 +4,18 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Query, Request, status
-from sqlalchemy import func, select
+from sqlalchemy import false, func, select
 from sqlalchemy.orm import defer
 
 from ..dependencies import CsrfDep, DbDep, SettingsDep, WorkspaceAccessDep, WorkspaceOperatorDep
 from ..models import SyncAction, SyncProfile, SyncRun, SyncRunStatus, SyncTrigger, Workspace
 from ..problems import ProblemException
+from ..run_results import (
+    action_ids_for_event,
+    build_run_result,
+    load_persisted_plan,
+    preparation_action_ids,
+)
 from ..schemas import (
     RunCreate,
     SyncActionList,
@@ -17,6 +23,7 @@ from ..schemas import (
     SyncRunDetail,
     SyncRunList,
     SyncRunOut,
+    SyncRunResult,
 )
 
 
@@ -98,6 +105,98 @@ def list_run_actions(
     items = db.scalars(
         select(SyncAction)
         .where(SyncAction.run_id == run_id)
+        .order_by(SyncAction.ordinal, SyncAction.id)
+        .limit(limit)
+        .offset(offset)
+    ).all()
+    return SyncActionList(
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
+        status_counts=SyncActionStatusCounts(**status_counts),
+    )
+
+
+@router.get("/runs/{run_id}/result", response_model=SyncRunResult)
+def get_run_result(
+    run_id: uuid.UUID, access: WorkspaceAccessDep, db: DbDep
+) -> SyncRunResult:
+    run = _workspace_run(run_id, access, db)
+    rows = db.scalars(
+        select(SyncAction)
+        .where(SyncAction.run_id == run.id)
+        .order_by(SyncAction.ordinal, SyncAction.id)
+    ).all()
+    return build_run_result(run, rows)
+
+
+@router.get(
+    "/runs/{run_id}/result/events/{event_plan_id}/actions",
+    response_model=SyncActionList,
+)
+def list_event_result_actions(
+    run_id: uuid.UUID,
+    event_plan_id: str,
+    access: WorkspaceAccessDep,
+    db: DbDep,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0, le=2_147_483_647),
+) -> SyncActionList:
+    run = _workspace_run(run_id, access, db)
+    plan = load_persisted_plan(run)
+    action_ids = action_ids_for_event(plan, event_plan_id) if plan is not None else None
+    if action_ids is None:
+        raise ProblemException(404, "Nicht gefunden", "Ereignisergebnis nicht gefunden.", "not_found")
+    return _action_page(db, run.id, action_ids, limit, offset)
+
+
+@router.get(
+    "/runs/{run_id}/result/preparation-actions",
+    response_model=SyncActionList,
+)
+def list_preparation_actions(
+    run_id: uuid.UUID,
+    access: WorkspaceAccessDep,
+    db: DbDep,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0, le=2_147_483_647),
+) -> SyncActionList:
+    run = _workspace_run(run_id, access, db)
+    plan = load_persisted_plan(run)
+    ids = preparation_action_ids(plan) if plan is not None else ()
+    return _action_page(db, run.id, ids, limit, offset)
+
+
+def _workspace_run(run_id: uuid.UUID, access: WorkspaceAccessDep, db: DbDep) -> SyncRun:
+    run = db.scalar(
+        select(SyncRun).where(
+            SyncRun.id == run_id, SyncRun.workspace_id == access.workspace.id
+        )
+    )
+    if run is None:
+        raise ProblemException(404, "Nicht gefunden", "Sync-Lauf nicht gefunden.", "not_found")
+    return run
+
+
+def _action_page(
+    db: DbDep,
+    run_id: uuid.UUID,
+    action_ids: tuple[uuid.UUID, ...],
+    limit: int,
+    offset: int,
+) -> SyncActionList:
+    predicate = SyncAction.id.in_(action_ids) if action_ids else false()
+    grouped = db.execute(
+        select(SyncAction.status, func.count())
+        .where(SyncAction.run_id == run_id, predicate)
+        .group_by(SyncAction.status)
+    ).all()
+    status_counts = {status.value: int(count) for status, count in grouped}
+    total = sum(status_counts.values())
+    items = db.scalars(
+        select(SyncAction)
+        .where(SyncAction.run_id == run_id, predicate)
         .order_by(SyncAction.ordinal, SyncAction.id)
         .limit(limit)
         .offset(offset)

@@ -50,6 +50,7 @@ from .sync.models import (
     EventSyncCheckpoint,
     EventSelector,
     MatchMode,
+    MultipleAnchorPolicy,
     Ownership,
     PlacementRule,
     PlannedAction,
@@ -381,7 +382,7 @@ class SqlRunRepository:
                     raise ConcurrentModificationError("Run already contains a different plan")
                 return
             run.plan_json = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "fingerprint": plan.fingerprint,
                 "plan": plan.as_dict(),
             }
@@ -1079,6 +1080,9 @@ def _profile_config(profile: SyncProfile, *, revision: int) -> ProfileConfig:
             relation=AnchorRelation(str(rule.get("relation") or "after")),
             song_start=int(rule.get("song_start", 0)),
             song_end=(int(rule["song_end"]) if rule.get("song_end") is not None else None),
+            multiple_anchor_policy=MultipleAnchorPolicy(
+                str(rule.get("multiple_anchor_policy") or "fail")
+            ),
         )
         for rule in profile.placements or ()
     )

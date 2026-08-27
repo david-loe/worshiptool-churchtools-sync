@@ -426,6 +426,7 @@ class PlacementConfig(APIRequest):
     id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
     anchor: AgendaAnchorConfig
     relation: Literal["before", "at", "after"] = "after"
+    multiple_anchor_policy: Literal["fail", "first"] = "fail"
     song_start: int = Field(
         default=0,
         description="Inklusiver Song-Startindex; negative Werte zählen vom Ende.",
@@ -683,6 +684,49 @@ class SyncActionList(BaseModel):
     limit: int = Field(ge=1, le=200)
     offset: int = Field(ge=0)
     status_counts: SyncActionStatusCounts
+
+
+class RunResultMessage(BaseModel):
+    code: str
+    message: str
+    severity: Literal["info", "warning", "error"]
+    phase: Literal["plan", "execution", "run"]
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class CreatedSongResult(BaseModel):
+    action_id: str
+    source_song_id: str | None = None
+    target_song_id: str | None = None
+    name: str
+    author: str
+    ccli: str | None = None
+
+
+class RunEventResult(BaseModel):
+    id: str
+    status: Literal["planned", "verified", "skipped", "failed"]
+    source_event_id: str | None = None
+    target_event_id: str | None = None
+    source_event_name: str | None = None
+    source_event_starts_at: list[datetime] | None = None
+    target_event_name: str | None = None
+    target_event_starts_at: datetime | None = None
+    messages: list[RunResultMessage] = Field(default_factory=list)
+    action_counts: SyncActionStatusCounts
+    action_total: int = Field(ge=0)
+    new_songs: list[CreatedSongResult] = Field(default_factory=list)
+
+
+class SyncRunResult(BaseModel):
+    total: int = Field(ge=0)
+    planned: int = Field(ge=0)
+    verified: int = Field(ge=0)
+    skipped: int = Field(ge=0)
+    failed: int = Field(ge=0)
+    events: list[RunEventResult]
+    preparation_action_counts: SyncActionStatusCounts
+    preparation_action_total: int = Field(ge=0)
 
 
 class SyncRunList(BaseModel):

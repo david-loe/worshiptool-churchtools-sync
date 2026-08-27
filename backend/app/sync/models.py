@@ -27,6 +27,11 @@ class AnchorRelation(str, Enum):
     AFTER = "after"
 
 
+class MultipleAnchorPolicy(str, Enum):
+    FAIL = "fail"
+    FIRST = "first"
+
+
 class RunStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
@@ -161,6 +166,7 @@ class PlacementRule:
     relation: AnchorRelation = AnchorRelation.AFTER
     song_start: int = 0
     song_end: int | None = None
+    multiple_anchor_policy: MultipleAnchorPolicy = MultipleAnchorPolicy.FAIL
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,6 +241,10 @@ class EventPlan:
     source_event_id: str
     target_event_id: str | None
     status: EventPlanStatus
+    source_event_name: str | None = None
+    source_event_starts_at: tuple[datetime, ...] | None = None
+    target_event_name: str | None = None
+    target_event_starts_at: datetime | None = None
     initial_agenda_fingerprint: str | None = None
     source_fingerprint: str | None = None
     config_fingerprint: str | None = None
@@ -270,6 +280,14 @@ class SyncPlan:
                 event.pop("source_fingerprint", None)
             if event.get("config_fingerprint") is None:
                 event.pop("config_fingerprint", None)
+            for key in (
+                "source_event_name",
+                "source_event_starts_at",
+                "target_event_name",
+                "target_event_starts_at",
+            ):
+                if event.get(key) is None:
+                    event.pop(key, None)
         encoded = json.dumps(primitive, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 

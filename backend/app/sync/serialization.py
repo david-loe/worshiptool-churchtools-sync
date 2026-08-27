@@ -38,11 +38,35 @@ def sync_plan_from_dict(value: Mapping[str, Any]) -> SyncPlan:
 
 def _event(value: Any) -> EventPlan:
     item = _mapping(value, "event")
+    raw_source_starts = item.get("source_event_starts_at")
+    source_starts = None
+    if raw_source_starts is not None:
+        if not isinstance(raw_source_starts, list):
+            raise SchemaDriftError(
+                "Persisted plan field 'source_event_starts_at' is not a list"
+            )
+        source_starts = tuple(_aware_datetime(value) for value in raw_source_starts)
     return EventPlan(
         id=str(item["id"]),
         source_event_id=str(item["source_event_id"]),
         target_event_id=str(item["target_event_id"]) if item.get("target_event_id") is not None else None,
         status=EventPlanStatus(str(item["status"])),
+        source_event_name=(
+            str(item["source_event_name"])
+            if item.get("source_event_name") is not None
+            else None
+        ),
+        source_event_starts_at=source_starts,
+        target_event_name=(
+            str(item["target_event_name"])
+            if item.get("target_event_name") is not None
+            else None
+        ),
+        target_event_starts_at=(
+            _aware_datetime(item["target_event_starts_at"])
+            if item.get("target_event_starts_at") is not None
+            else None
+        ),
         initial_agenda_fingerprint=(
             str(item["initial_agenda_fingerprint"])
             if item.get("initial_agenda_fingerprint") is not None
@@ -98,3 +122,10 @@ def _list(value: Mapping[str, Any], key: str) -> list[Any]:
     if not isinstance(item, list):
         raise SchemaDriftError(f"Persisted plan field '{key}' is not a list")
     return item
+
+
+def _aware_datetime(value: Any) -> datetime:
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("persisted event timestamp is naive")
+    return parsed

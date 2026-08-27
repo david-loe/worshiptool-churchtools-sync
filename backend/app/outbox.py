@@ -41,6 +41,7 @@ from .models import (
     User,
     WorkspaceInvitation,
 )
+from .run_results import build_run_result
 from .security import SecretCipher, utcnow
 from .web_push import PushEndpointError, validate_push_endpoint
 
@@ -391,6 +392,20 @@ class NotificationService:
                 )
             ).all()
             for subscription in subscriptions:
+                event_plan_id = (
+                    str(data.get("event_plan_id"))
+                    if data and data.get("event_plan_id")
+                    else None
+                )
+                target_url = (
+                    f"/runs/{run_id}?workspace={workspace_id}&event={event_plan_id}"
+                    if run_id and event_plan_id
+                    else (
+                        f"/runs/{run_id}?workspace={workspace_id}"
+                        if run_id
+                        else f"/notifications?workspace={workspace_id}"
+                    )
+                )
                 enqueue_outbox(
                     self.db,
                     self.settings,
@@ -403,11 +418,8 @@ class NotificationService:
                             "notification_id": str(notification.id),
                             "workspace_id": str(workspace_id),
                             "run_id": str(run_id) if run_id else None,
-                            "url": (
-                                f"/runs/{run_id}?workspace={workspace_id}"
-                                if run_id
-                                else f"/notifications?workspace={workspace_id}"
-                            ),
+                            "event_plan_id": event_plan_id,
+                            "url": target_url,
                         },
                     },
                     idempotency_key=f"notification:{notification.id}:push:{subscription.id}",
@@ -484,15 +496,22 @@ class NotificationService:
                 User.is_active.is_(True),
             )
         ).all()
-        new_song_count = self.db.scalar(
-            select(func.count())
-            .select_from(SyncAction)
-            .where(
-                SyncAction.run_id == run.id,
-                SyncAction.kind == SyncActionKind.CREATE_SONG,
-                SyncAction.status == SyncActionStatus.VERIFIED,
-            )
-        ) or 0
+        action_rows = self.db.scalars(
+            select(SyncAction)
+            .where(SyncAction.run_id == run.id)
+            .order_by(SyncAction.ordinal, SyncAction.id)
+        ).all()
+        run_result = build_run_result(run, action_rows)
+        song_events = [event for event in run_result.events if event.new_songs]
+        can_group_songs = bool(song_events) and all(
+            event.source_event_name is not None for event in song_events
+        )
+        new_song_count = sum(
+            1
+            for action in action_rows
+            if action.kind == SyncActionKind.CREATE_SONG
+            and action.status == SyncActionStatus.VERIFIED
+        )
         created = 0
         for user, _membership in members:
             preference = self.preference(run.workspace_id, user.id)
@@ -527,33 +546,72 @@ class NotificationService:
                 if before is None:
                     created += 1
             if new_song_count and profile_policy.get("notify_new_songs", True):
-                key = f"run:{run.id}:new-songs:user:{user.id}"
-                before = self.db.scalar(
-                    select(Notification.id).where(Notification.deduplication_key == key)
-                )
-                body_text = (
-                    "Ein neuer Song wurde in ChurchTools angelegt."
-                    if new_song_count == 1
-                    else f"{new_song_count} neue Songs wurden in ChurchTools angelegt."
-                )
-                self.create_for_user(
-                    workspace_id=run.workspace_id,
-                    user=user,
-                    severity=NotificationSeverity.INFO,
-                    category="new_songs",
-                    title="Neue ChurchTools-Songs",
-                    body=body_text,
-                    run_id=run.id,
-                    data={
-                        "profile_id": str(run.profile_id),
-                        "status": run.status.value,
-                        "songs_created": new_song_count,
-                    },
-                    deduplication_key=key,
-                    channel_policy=profile_policy,
-                )
-                if before is None:
-                    created += 1
+                if can_group_songs:
+                    for event in song_events:
+                        key = f"run:{run.id}:new-songs:event:{event.id}:user:{user.id}"
+                        before = self.db.scalar(
+                            select(Notification.id).where(Notification.deduplication_key == key)
+                        )
+                        count = len(event.new_songs)
+                        event_name = event.target_event_name or event.source_event_name or event.target_event_id or event.source_event_id
+                        body_text = (
+                            f"Ein neuer Song wurde für {event_name} in ChurchTools angelegt."
+                            if count == 1
+                            else f"{count} neue Songs wurden für {event_name} in ChurchTools angelegt."
+                        )
+                        self.create_for_user(
+                            workspace_id=run.workspace_id,
+                            user=user,
+                            severity=NotificationSeverity.INFO,
+                            category="new_songs",
+                            title=f"Neue Songs · {event_name}",
+                            body=body_text,
+                            run_id=run.id,
+                            data={
+                                "profile_id": str(run.profile_id),
+                                "status": run.status.value,
+                                "event_plan_id": event.id,
+                                "target_event_id": event.target_event_id,
+                                "event_starts_at": (
+                                    event.target_event_starts_at.isoformat()
+                                    if event.target_event_starts_at
+                                    else None
+                                ),
+                                "songs_created": count,
+                            },
+                            deduplication_key=key,
+                            channel_policy=profile_policy,
+                        )
+                        if before is None:
+                            created += 1
+                else:
+                    key = f"run:{run.id}:new-songs:user:{user.id}"
+                    before = self.db.scalar(
+                        select(Notification.id).where(Notification.deduplication_key == key)
+                    )
+                    body_text = (
+                        "Ein neuer Song wurde in ChurchTools angelegt."
+                        if new_song_count == 1
+                        else f"{new_song_count} neue Songs wurden in ChurchTools angelegt."
+                    )
+                    self.create_for_user(
+                        workspace_id=run.workspace_id,
+                        user=user,
+                        severity=NotificationSeverity.INFO,
+                        category="new_songs",
+                        title="Neue ChurchTools-Songs",
+                        body=body_text,
+                        run_id=run.id,
+                        data={
+                            "profile_id": str(run.profile_id),
+                            "status": run.status.value,
+                            "songs_created": new_song_count,
+                        },
+                        deduplication_key=key,
+                        channel_policy=profile_policy,
+                    )
+                    if before is None:
+                        created += 1
         run.notifications_fanned_out_at = utcnow()
         return created
 

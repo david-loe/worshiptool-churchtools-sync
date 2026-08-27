@@ -39,6 +39,13 @@ from app.outbox import (
 from app.routers.auth import register, request_recovery
 from app.schemas import RecoveryRequest, RegisterRequest
 from app.security import SecretCipher, hash_password
+from app.sync.models import (
+    ActionKind,
+    EventPlan,
+    EventPlanStatus,
+    PlannedAction,
+    SyncPlan,
+)
 
 
 class RecordingSender:
@@ -373,6 +380,28 @@ def test_run_fanout_respects_preferences_and_push_payload_shape(
         f"/runs/{run.id}?workspace={workspace.id}"
     )
 
+    NotificationService(db, settings).create_for_user(
+        workspace_id=workspace.id,
+        user=user,
+        severity=NotificationSeverity.INFO,
+        category="new_songs",
+        title="Neuer Song",
+        body="Ein neuer Song wurde angelegt.",
+        run_id=run.id,
+        data={"event_plan_id": "event-plan-1"},
+        deduplication_key="push-event-link",
+        channel_policy={"email": False, "web_push": True},
+    )
+    db.commit()
+    event_sender = RecordingSender()
+    event_result = OutboxConsumer(
+        database, settings, push_sender=event_sender
+    ).process_batch()
+    assert event_result.delivered == 1
+    assert event_sender.calls[0][1]["data"]["url"] == (
+        f"/runs/{run.id}?workspace={workspace.id}&event=event-plan-1"
+    )
+
 
 def test_profile_channel_policy_suppresses_external_delivery_but_keeps_in_app(
     db, settings
@@ -447,6 +476,129 @@ def test_fanout_reports_verified_new_songs_separately(db, settings):
         select(Notification.category).order_by(Notification.category)
     ).all()
     assert categories == ["new_songs", "sync_run"]
+
+
+def test_fanout_bundles_verified_new_songs_per_event(db, settings):
+    _user, workspace, profile = _tenant_graph(db)
+    profile.notification_preferences = {
+        "in_app": True,
+        "email": False,
+        "web_push": False,
+        "telegram": False,
+        "notify_success": False,
+        "notify_new_songs": True,
+    }
+    run = SyncRun(
+        workspace_id=workspace.id,
+        profile_id=profile.id,
+        config_revision=1,
+        status=SyncRunStatus.PARTIAL,
+        trigger=SyncTrigger.SCHEDULED,
+        finished_at=datetime.now(timezone.utc),
+    )
+    db.add(run)
+    db.flush()
+    create = PlannedAction(
+        "1" * 32,
+        0,
+        ActionKind.CREATE_SONG,
+        {
+            "source_song_id": "source-song",
+            "name": "Neuer Song",
+            "author": "Autor",
+            "ccli": None,
+            "song_resource_key": "song:source-song",
+            "arrangement_resource_key": "arrangement:source-song",
+        },
+    )
+    event_actions = (
+        PlannedAction(
+            "4" * 32,
+            1,
+            ActionKind.INSERT_ITEM,
+            {},
+            event_plan_id="2" * 32,
+            dependencies=("arrangement:source-song",),
+        ),
+        PlannedAction(
+            "5" * 32,
+            2,
+            ActionKind.INSERT_ITEM,
+            {},
+            event_plan_id="3" * 32,
+            dependencies=("arrangement:source-song",),
+        ),
+    )
+    plan = SyncPlan(
+        run_id=str(run.id),
+        profile_id=str(profile.id),
+        profile_revision=1,
+        created_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
+        preparation_actions=(create,),
+        events=tuple(
+            EventPlan(
+                id=str(index + 2) * 32,
+                source_event_id=f"source-{index}",
+                target_event_id=f"target-{index}",
+                status=EventPlanStatus.READY,
+                source_event_name=f"Service {index}",
+                source_event_starts_at=(
+                    datetime(2026, 9, 6 + index, 8, tzinfo=timezone.utc),
+                ),
+                target_event_name=f"Gottesdienst {index}",
+                target_event_starts_at=datetime(
+                    2026, 9, 6 + index, 8, tzinfo=timezone.utc
+                ),
+                actions=(event_actions[index],),
+            )
+            for index in range(2)
+        ),
+    )
+    run.plan_json = {
+        "schema_version": 2,
+        "fingerprint": plan.fingerprint,
+        "plan": plan.as_dict(),
+    }
+    db.add_all(
+        [
+            SyncAction(
+                id=uuid.UUID(create.id),
+                run_id=run.id,
+                kind=SyncActionKind.CREATE_SONG,
+                status=SyncActionStatus.VERIFIED,
+                ordinal=0,
+                payload_json=dict(create.payload),
+                fingerprint_json={"song_id": "churchtools-song"},
+            ),
+            *[
+                SyncAction(
+                    id=uuid.UUID(action.id),
+                    run_id=run.id,
+                    event_id=f"target-{index}",
+                    kind=SyncActionKind.INSERT_ITEM,
+                    status=SyncActionStatus.VERIFIED,
+                    ordinal=action.ordinal,
+                    payload_json={},
+                )
+                for index, action in enumerate(event_actions)
+            ],
+        ]
+    )
+    db.flush()
+
+    assert NotificationService(db, settings).fanout_run(run) == 3
+
+    song_notifications = db.scalars(
+        select(Notification)
+        .where(Notification.category == "new_songs")
+        .order_by(Notification.title)
+    ).all()
+    assert len(song_notifications) == 2
+    assert {item.data_json["event_plan_id"] for item in song_notifications} == {
+        "2" * 32,
+        "3" * 32,
+    }
+    assert all(item.data_json["songs_created"] == 1 for item in song_notifications)
 
 
 def test_registration_and_recovery_enqueue_transactional_emails(db, settings):

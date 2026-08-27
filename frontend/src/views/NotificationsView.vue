@@ -26,6 +26,15 @@ const permission = ref(typeof Notification === 'undefined' ? 'unsupported' : Not
 const notificationTotal = ref(0)
 const hasMore = computed(() => notifications.value.length < notificationTotal.value)
 
+function notificationRunLink(notification: AppNotification): string {
+  const eventId = typeof notification.data.event_plan_id === 'string'
+    ? notification.data.event_plan_id
+    : null
+  const query = new URLSearchParams({ workspace: notification.workspace_id })
+  if (eventId) query.set('event', eventId)
+  return `/runs/${notification.run_id}?${query}`
+}
+
 async function loadNotifications(append = false): Promise<void> {
   const workspaceId = workspaceStore.activeId
   if (!workspaceId) return
@@ -197,7 +206,7 @@ onMounted(load)
     <section class="card notification-center">
       <div class="section-heading"><div><h2>Posteingang</h2><p>Fehler, Warnungen und wichtige Sync-Ereignisse</p></div><label class="check-label"><input v-model="unreadOnly" type="checkbox" /> <span>Nur ungelesene</span></label></div>
       <EmptyState v-if="!notifications.length" title="Keine Benachrichtigungen" text="Hier ist gerade alles erledigt." symbol="✓" />
-      <ol v-else class="notification-list"><li v-for="notification in notifications" :key="notification.id" :class="[notification.severity, { unread: !notification.read_at }]"><span class="notification-symbol" aria-hidden="true">{{ notification.severity === 'error' ? '!' : notification.severity === 'warning' ? '△' : notification.severity === 'success' ? '✓' : 'i' }}</span><div><header><strong>{{ notification.title }}</strong><span>{{ formatDateTime(notification.created_at) }}</span></header><p>{{ notification.body }}</p><div><span class="category">{{ notification.category }}</span><span class="notification-actions"><button v-if="!notification.read_at" class="link-button" type="button" :aria-label="`Als gelesen markieren: ${notification.title}`" @click="markRead(notification)">Als gelesen</button><RouterLink v-if="notification.run_id" :to="`/runs/${notification.run_id}`">Zum Lauf →</RouterLink></span></div></div></li></ol>
+      <ol v-else class="notification-list"><li v-for="notification in notifications" :key="notification.id" :class="[notification.severity, { unread: !notification.read_at }]"><span class="notification-symbol" aria-hidden="true">{{ notification.severity === 'error' ? '!' : notification.severity === 'warning' ? '△' : notification.severity === 'success' ? '✓' : 'i' }}</span><div><header><strong>{{ notification.title }}</strong><span>{{ formatDateTime(notification.created_at) }}</span></header><p>{{ notification.body }}</p><div><span class="category">{{ notification.category }}</span><span class="notification-actions"><button v-if="!notification.read_at" class="link-button" type="button" :aria-label="`Als gelesen markieren: ${notification.title}`" @click="markRead(notification)">Als gelesen</button><RouterLink v-if="notification.run_id" :to="notificationRunLink(notification)">{{ notification.data.event_plan_id ? 'Zum Ereignis' : 'Zum Lauf' }} →</RouterLink></span></div></div></li></ol>
       <button v-if="hasMore" class="button button-secondary button-wide" type="button" :disabled="loadingMore" @click="loadMore">{{ loadingMore ? 'Wird geladen …' : 'Weitere Benachrichtigungen laden' }}</button>
     </section>
     <aside class="card preferences-panel"><div class="section-heading"><div><h2>Präferenzen</h2><p>Gilt für alle Profile</p></div></div>

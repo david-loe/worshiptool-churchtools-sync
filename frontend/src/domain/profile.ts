@@ -78,6 +78,7 @@ export function newProfile(): SyncProfileInput {
       id: 'main',
       anchor: { item_type: 'header', title: 'Lobpreis' },
       relation: 'after',
+      multiple_anchor_policy: 'fail',
       song_start: 0,
       song_end: null,
     }],

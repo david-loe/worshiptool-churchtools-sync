@@ -23,6 +23,7 @@ from app.sync.models import (
     EventSyncCheckpoint,
     IssueSeverity,
     MatchMode,
+    MultipleAnchorPolicy,
     Ownership,
     PlacementRule,
     ProfileConfig,
@@ -135,6 +136,10 @@ def test_plan_fingerprint_remains_compatible_with_pre_snapshot_documents() -> No
     for event in legacy_document["events"]:
         event.pop("source_fingerprint")
         event.pop("config_fingerprint")
+        event.pop("source_event_name")
+        event.pop("source_event_starts_at")
+        event.pop("target_event_name")
+        event.pop("target_event_starts_at")
     legacy_fingerprint = hashlib.sha256(
         json.dumps(
             legacy_document,
@@ -147,6 +152,84 @@ def test_plan_fingerprint_remains_compatible_with_pre_snapshot_documents() -> No
     loaded = sync_plan_from_dict(legacy_document)
 
     assert loaded.fingerprint == legacy_fingerprint
+    assert loaded.events[0].source_event_name is None
+
+
+def test_plan_schema_two_contains_event_snapshots() -> None:
+    plan = _plan_split_placements(1)
+
+    assert plan.events[0].source_event_name == "Service"
+    assert plan.events[0].source_event_starts_at == (dt("2026-01-01T10:00:00Z"),)
+    assert plan.events[0].target_event_name == "Event"
+    assert plan.events[0].target_event_starts_at == dt("2026-01-01T10:00:00Z")
+
+
+def test_multiple_anchor_policy_fails_or_selects_first_deterministically() -> None:
+    start = dt("2026-01-01T10:00:00Z")
+
+    def make_plan(policy: MultipleAnchorPolicy):
+        configured = replace(
+            profile(),
+            placements=(
+                PlacementRule(
+                    "main",
+                    AgendaAnchor(item_type="header", title="Lobpreis"),
+                    multiple_anchor_policy=policy,
+                ),
+            ),
+        )
+        return SyncPlanner().plan(
+            run_id=f"anchors-{policy.value}",
+            profile=configured,
+            created_at=start,
+            source_events=(SourceEvent("source", "Service", (start,), ("song",)),),
+            target_events=(TargetEvent("target", "Event", start),),
+            source_songs=(source_song("song"),),
+            target_songs=(target_song(),),
+            agendas={
+                "target": Agenda(
+                    "target",
+                    (
+                        AgendaItem("later-id", 10, "header", "Lobpreis"),
+                        AgendaItem("second-at-position", 5, "header", "Lobpreis"),
+                        AgendaItem("first-at-position", 5, "header", "Lobpreis"),
+                    ),
+                )
+            },
+            ownerships={},
+        )
+
+    failed = make_plan(MultipleAnchorPolicy.FAIL).events[0]
+    selected = make_plan(MultipleAnchorPolicy.FIRST).events[0]
+
+    assert failed.status is EventPlanStatus.FAILED
+    assert failed.actions == ()
+    assert failed.issues[0].code == "anchor_not_unique"
+    assert failed.issues[0].details["matches"] == [
+        "first-at-position",
+        "second-at-position",
+        "later-id",
+    ]
+    assert selected.status is EventPlanStatus.READY
+    warning = next(issue for issue in selected.issues if issue.code == "anchor_multiple_first_selected")
+    assert warning.severity is IssueSeverity.WARNING
+    assert warning.details["selected_anchor_id"] == "first-at-position"
+    assert selected.actions[0].payload["before_item_id"] == "second-at-position"
+
+
+def test_missing_anchor_has_distinct_error_code() -> None:
+    plan = _plan_split_placements(
+        1,
+        (
+            PlacementRule(
+                "missing",
+                AgendaAnchor(item_type="header", title="Existiert nicht"),
+            ),
+        ),
+    )
+
+    assert plan.events[0].status is EventPlanStatus.FAILED
+    assert plan.events[0].issues[0].code == "anchor_not_found"
 
 
 def target_song(song_id: str = "ct-song", ccli: str | None = "123") -> TargetSong:

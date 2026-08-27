@@ -139,6 +139,7 @@ export interface PlacementRules {
   id: string
   anchor: AgendaAnchor
   relation: 'before' | 'at' | 'after'
+  multiple_anchor_policy: 'fail' | 'first'
   song_start: number
   song_end: number | null
 }
@@ -251,6 +252,51 @@ export interface SyncActionStatusCounts {
 
 export interface SyncActionPage extends Page<SyncAction> {
   status_counts: SyncActionStatusCounts
+}
+
+export type RunEventStatus = 'planned' | 'verified' | 'skipped' | 'failed'
+
+export interface RunResultMessage {
+  code: string
+  message: string
+  severity: 'info' | 'warning' | 'error'
+  phase: 'plan' | 'execution' | 'run'
+  details: Record<string, unknown>
+}
+
+export interface CreatedSongResult {
+  action_id: string
+  source_song_id: string | null
+  target_song_id: string | null
+  name: string
+  author: string
+  ccli: string | null
+}
+
+export interface RunEventResult {
+  id: string
+  status: RunEventStatus
+  source_event_id: string | null
+  target_event_id: string | null
+  source_event_name: string | null
+  source_event_starts_at: string[] | null
+  target_event_name: string | null
+  target_event_starts_at: string | null
+  messages: RunResultMessage[]
+  action_counts: SyncActionStatusCounts
+  action_total: number
+  new_songs: CreatedSongResult[]
+}
+
+export interface SyncRunResult {
+  total: number
+  planned: number
+  verified: number
+  skipped: number
+  failed: number
+  events: RunEventResult[]
+  preparation_action_counts: SyncActionStatusCounts
+  preparation_action_total: number
 }
 
 export interface AppNotification {

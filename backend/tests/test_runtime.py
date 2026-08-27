@@ -300,6 +300,7 @@ def test_sql_run_repository_claim_plan_recovery_and_owner_checked_finish(
     specification = asyncio.run(repository.claim(str(run.id), "worker-a", 300))
     assert specification is not None
     assert specification.workspace_id == str(workspace.id)
+    assert specification.profile.placements[0].multiple_anchor_policy.value == "fail"
     assert asyncio.run(repository.claim(str(run.id), "worker-b", 300)) is None
 
     plan = SyncPlan(
@@ -311,6 +312,8 @@ def test_sql_run_repository_claim_plan_recovery_and_owner_checked_finish(
         events=(),
     )
     asyncio.run(repository.persist_plan(str(run.id), plan, "worker-a"))
+    db.expire_all()
+    assert db.get(SyncRun, run.id).plan_json["schema_version"] == 2
     recovered = asyncio.run(repository.load_plan(str(run.id)))
     assert recovered is not None
     assert recovered.fingerprint == plan.fingerprint
