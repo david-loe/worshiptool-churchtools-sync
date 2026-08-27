@@ -578,6 +578,22 @@ class _FailingDispatcher:
         raise RuntimeError("broker unavailable")
 
 
+def _request_with_dispatcher(dispatcher) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/",
+            "headers": [],
+            "query_string": b"",
+            "scheme": "http",
+            "server": ("test", 80),
+            "client": ("127.0.0.1", 1234),
+            "app": SimpleNamespace(state=SimpleNamespace(run_dispatcher=dispatcher)),
+        }
+    )
+
+
 def test_manual_run_is_persisted_before_dispatch_and_deduplicated(db, settings):
     user, workspace = _register(db, settings, "run@example.org", "Runs")
     access = _access(user, workspace)
@@ -594,20 +610,7 @@ def test_manual_run_is_persisted_before_dispatch_and_deduplicated(db, settings):
         None,
     )
     dispatcher = _Dispatcher()
-    app = SimpleNamespace(state=SimpleNamespace(run_dispatcher=dispatcher))
-    request = Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "path": "/",
-            "headers": [],
-            "query_string": b"",
-            "scheme": "http",
-            "server": ("test", 80),
-            "client": ("127.0.0.1", 1234),
-            "app": app,
-        }
-    )
+    request = _request_with_dispatcher(dispatcher)
     run = start_run(
         profile.id, RunCreate(dry_run=True), request, access, settings, db, None
     )
@@ -634,6 +637,110 @@ def test_manual_run_is_persisted_before_dispatch_and_deduplicated(db, settings):
     assert actual.status == SyncRunStatus.QUEUED
     assert actual.dispatch_attempted_at is not None
     assert dispatcher.ids == [run.id, actual.id]
+
+
+@pytest.mark.parametrize(
+    ("cooldown_seconds", "cooldown_minutes"),
+    [(300, 5), (900, 15), (1800, 30)],
+)
+def test_manual_run_uses_workspace_cooldown(
+    db, settings, cooldown_seconds, cooldown_minutes
+):
+    user, workspace = _register(
+        db, settings, f"cooldown-{cooldown_seconds}@example.org", "Cooldown"
+    )
+    workspace.manual_run_cooldown_seconds = cooldown_seconds
+    db.commit()
+    access = _access(user, workspace)
+    source, target = _connections(db, settings, access)
+    profile = create_profile(
+        ProfileCreate(
+            source_connection_id=source.id,
+            target_connection_id=target.id,
+            name="Main",
+            song_category_id=4,
+        ),
+        access,
+        db,
+        None,
+    )
+    dispatcher = _Dispatcher()
+    request = _request_with_dispatcher(dispatcher)
+    first = start_run(
+        profile.id, RunCreate(dry_run=False), request, access, settings, db, None
+    )
+    first.status = SyncRunStatus.SUCCEEDED
+    first.finished_at = datetime.now(timezone.utc)
+    db.commit()
+
+    with pytest.raises(ProblemException) as error:
+        start_run(
+            profile.id, RunCreate(dry_run=False), request, access, settings, db, None
+        )
+
+    assert error.value.code == "manual_run_cooldown"
+    assert f"{cooldown_minutes} Minuten" in error.value.detail
+    retry_after = int(error.value.headers["Retry-After"])
+    assert cooldown_seconds - 2 <= retry_after <= cooldown_seconds
+
+    workspace.manual_run_cooldown_seconds = 0
+    db.commit()
+    second = start_run(
+        profile.id, RunCreate(dry_run=False), request, access, settings, db, None
+    )
+    assert second.status == SyncRunStatus.QUEUED
+    with pytest.raises(ProblemException) as active_error:
+        start_run(
+            profile.id, RunCreate(dry_run=False), request, access, settings, db, None
+        )
+    assert active_error.value.code == "run_already_active"
+
+
+def test_manual_run_cooldown_is_scoped_to_each_profile(db, settings):
+    user, workspace = _register(db, settings, "profile-cooldown@example.org", "Profiles")
+    workspace.manual_run_cooldown_seconds = 1800
+    access = _access(user, workspace)
+    source, target = _connections(db, settings, access)
+    profiles = [
+        create_profile(
+            ProfileCreate(
+                source_connection_id=source.id,
+                target_connection_id=target.id,
+                name=name,
+                song_category_id=4,
+            ),
+            access,
+            db,
+            None,
+        )
+        for name in ("First", "Second")
+    ]
+    dispatcher = _Dispatcher()
+    request = _request_with_dispatcher(dispatcher)
+    first = start_run(
+        profiles[0].id,
+        RunCreate(dry_run=False),
+        request,
+        access,
+        settings,
+        db,
+        None,
+    )
+    first.status = SyncRunStatus.SUCCEEDED
+    first.finished_at = datetime.now(timezone.utc)
+    db.commit()
+
+    second = start_run(
+        profiles[1].id,
+        RunCreate(dry_run=False),
+        request,
+        access,
+        settings,
+        db,
+        None,
+    )
+    assert second.status == SyncRunStatus.QUEUED
+    assert dispatcher.ids == [first.id, second.id]
 
 
 def test_run_summary_omits_plan_and_actions_are_bounded_and_paginated(db, settings):

@@ -268,8 +268,9 @@ def start_run(
             },
         )
     now = datetime.now(timezone.utc)
+    cooldown_seconds = workspace.manual_run_cooldown_seconds
     last_manual = None
-    if not payload.dry_run:
+    if not payload.dry_run and cooldown_seconds > 0:
         last_manual = db.scalar(
             select(SyncRun)
             .where(
@@ -282,14 +283,15 @@ def start_run(
         )
     if last_manual is not None:
         retry_at = _as_utc(last_manual.created_at) + timedelta(
-            seconds=settings.manual_run_cooldown_seconds
+            seconds=cooldown_seconds
         )
         if retry_at > now:
             retry_after = max(1, int((retry_at - now).total_seconds()))
             raise ProblemException(
                 429,
                 "Manueller Start zu früh",
-                "Zwischen manuellen Starts müssen mindestens 30 Minuten liegen.",
+                "Zwischen manuellen Starts müssen mindestens "
+                f"{cooldown_seconds // 60} Minuten liegen.",
                 "manual_run_cooldown",
                 headers={"Retry-After": str(retry_after)},
             )

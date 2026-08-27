@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     Enum as SAEnum,
     ForeignKey,
@@ -188,6 +189,15 @@ class OneTimeToken(Base):
 
 class Workspace(TimestampMixin, Base):
     __tablename__ = "workspaces"
+    __table_args__ = (
+        CheckConstraint(
+            "manual_run_cooldown_seconds IN (0, 300, 900, 1800)",
+            name="manual_run_cooldown_allowed",
+        ),
+        # The database owns the new-column default. Avoid RETURNING it so
+        # workspace inserts remain safe while a rolling migration is pending.
+        {"implicit_returning": False},
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), primary_key=True, default=new_uuid
@@ -197,6 +207,9 @@ class Workspace(TimestampMixin, Base):
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     profile_quota: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
     member_quota: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
+    manual_run_cooldown_seconds: Mapped[int] = mapped_column(
+        Integer, server_default="1800", nullable=False
+    )
 
     memberships: Mapped[list["Membership"]] = relationship(
         back_populates="workspace", cascade="all, delete-orphan"

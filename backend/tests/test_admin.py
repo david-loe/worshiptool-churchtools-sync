@@ -73,12 +73,20 @@ def test_admin_api_requires_totp_verified_session_and_audits_quota_change(db, se
 
     result = update_workspace_quotas(
         workspace.id,
-        WorkspaceQuotaUpdate(profile_quota=25, member_quota=100),
+        WorkspaceQuotaUpdate(
+            profile_quota=25,
+            member_quota=100,
+            manual_run_cooldown_seconds=300,
+        ),
         admin,
         db,
         None,
     )
-    assert (result.profile_quota, result.member_quota) == (25, 100)
+    assert (
+        result.profile_quota,
+        result.member_quota,
+        result.manual_run_cooldown_seconds,
+    ) == (25, 100, 300)
     listing = list_all_workspaces(admin, db, None, 50, 0)
     assert listing.total == 1 and listing.items[0].id == workspace.id
     audit = db.scalar(
@@ -88,6 +96,12 @@ def test_admin_api_requires_totp_verified_session_and_audits_quota_change(db, se
     assert audit.metadata_json["previous"] == {
         "profile_quota": 3,
         "member_quota": 10,
+        "manual_run_cooldown_seconds": 1800,
+    }
+    assert audit.metadata_json["current"] == {
+        "profile_quota": 25,
+        "member_quota": 100,
+        "manual_run_cooldown_seconds": 300,
     }
 
 

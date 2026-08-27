@@ -104,9 +104,9 @@ test('Verbindungsdialog hält den Fokus und stellt ihn nach Escape wieder her', 
   await expect(trigger).toBeFocused()
 })
 
-test('Plattform-Admin ändert Workspace-Quoten über die geschützte API', async ({ page }) => {
+test('Plattform-Admin ändert Workspace-Nutzung über die geschützte API', async ({ page }) => {
   const admin = { ...user, is_platform_admin: true }
-  const adminWorkspace = { ...workspace, profile_count: 2, member_count: 4 }
+  const adminWorkspace = { ...workspace, profile_count: 2, member_count: 4, manual_run_cooldown_seconds: 1800 as const }
   let updateBody: unknown
   await page.route('**/health/ready', (route) => json(route, { status: 'ok', database: 'ok', redis: 'ok', version: '1.0.0' }))
   await page.route('**/api/v1/**', async (route) => {
@@ -116,14 +116,14 @@ test('Plattform-Admin ändert Workspace-Quoten über die geschützte API', async
     if (path.endsWith('/admin/workspaces')) return json(route, { items: [adminWorkspace], total: 1, limit: 50, offset: 0 })
     if (path.endsWith(`/admin/workspaces/${workspace.id}/quotas`) && route.request().method() === 'PATCH') {
       updateBody = route.request().postDataJSON()
-      return json(route, { ...adminWorkspace, profile_quota: 7, member_quota: 20 })
+      return json(route, { ...adminWorkspace, profile_quota: 7, member_quota: 20, manual_run_cooldown_seconds: 300 })
     }
     return json(route, { title: 'Nicht gefunden', status: 404 }, 404)
   })
 
   await page.goto('/system')
-  await expect(page.getByRole('heading', { name: 'Workspace-Quoten' })).toBeVisible()
-  const quotaTrigger = page.getByRole('button', { name: 'Quoten ändern' })
+  await expect(page.getByRole('heading', { name: 'Workspace-Nutzung' })).toBeVisible()
+  const quotaTrigger = page.getByRole('button', { name: 'Nutzung ändern' })
   await quotaTrigger.click()
   await expect(page.getByLabel('Maximale Sync-Profile')).toBeFocused()
   await page.keyboard.press('Escape')
@@ -133,11 +133,13 @@ test('Plattform-Admin ändert Workspace-Quoten über die geschützte API', async
   await quotaTrigger.click()
   await page.getByLabel('Maximale Sync-Profile').fill('7')
   await page.getByLabel('Maximale Mitglieder').fill('20')
-  await page.getByRole('button', { name: 'Quoten speichern' }).click()
+  await page.getByLabel('Cooldown für manuelle Runs').selectOption('300')
+  await page.getByRole('button', { name: 'Nutzung speichern' }).click()
 
-  expect(updateBody).toEqual({ profile_quota: 7, member_quota: 20 })
+  expect(updateBody).toEqual({ profile_quota: 7, member_quota: 20, manual_run_cooldown_seconds: 300 })
   await expect(page.getByRole('cell', { name: '2 / 7' })).toBeVisible()
   await expect(page.getByRole('cell', { name: '4 / 20' })).toBeVisible()
+  await expect(page.getByRole('cell', { name: '5 Minuten' })).toBeVisible()
 })
 
 test('einzelne Benachrichtigung ist per Tastatur als gelesen markierbar', async ({ page }) => {

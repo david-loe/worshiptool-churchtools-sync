@@ -74,6 +74,26 @@ def test_connection_patch_rejects_the_immutable_provider_field():
         ConnectionUpdate.model_validate({"name": "Neu", "provider": "churchtools"})
 
 
+@pytest.mark.parametrize("cooldown", [-1, 1, 299, 301, 600, 1801])
+def test_workspace_usage_rejects_unsupported_manual_run_cooldowns(cooldown):
+    with pytest.raises(ValidationError):
+        WorkspaceQuotaUpdate(
+            profile_quota=3,
+            member_quota=10,
+            manual_run_cooldown_seconds=cooldown,
+        )
+
+
+@pytest.mark.parametrize("cooldown", [0, 300, 900, 1800])
+def test_workspace_usage_accepts_supported_manual_run_cooldowns(cooldown):
+    usage = WorkspaceQuotaUpdate(
+        profile_quota=3,
+        member_quota=10,
+        manual_run_cooldown_seconds=cooldown,
+    )
+    assert usage.manual_run_cooldown_seconds == cooldown
+
+
 def test_placement_config_accepts_python_style_negative_slice_boundaries():
     all_but_last = PlacementConfig.model_validate(
         {

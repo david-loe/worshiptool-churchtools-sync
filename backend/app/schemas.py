@@ -821,6 +821,7 @@ class AdminWorkspaceOut(BaseModel):
     archived_at: datetime | None
     profile_quota: int
     member_quota: int
+    manual_run_cooldown_seconds: Literal[0, 300, 900, 1800]
     profile_count: int
     member_count: int
     created_at: datetime
@@ -836,3 +837,4 @@ class AdminWorkspaceList(BaseModel):
 class WorkspaceQuotaUpdate(APIRequest):
     profile_quota: int = Field(ge=1, le=1000)
     member_quota: int = Field(ge=1, le=10000)
+    manual_run_cooldown_seconds: Literal[0, 300, 900, 1800]

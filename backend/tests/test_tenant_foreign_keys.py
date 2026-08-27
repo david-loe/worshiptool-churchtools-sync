@@ -184,7 +184,14 @@ def test_fresh_sqlite_migration_installs_and_reverses_tenant_foreign_keys(
         _assert_seed_preserved(engine, seeded)
         with engine.connect() as connection:
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-                "20260823_0014"
+                "20260827_0015"
+            )
+            assert connection.scalar(
+                text("SELECT manual_run_cooldown_seconds FROM workspaces")
+            ) == 1800
+        with pytest.raises(IntegrityError), engine.begin() as connection:
+            connection.execute(
+                text("UPDATE workspaces SET manual_run_cooldown_seconds = 600")
             )
     finally:
         engine.dispose()

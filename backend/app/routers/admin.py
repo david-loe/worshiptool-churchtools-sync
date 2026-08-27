@@ -22,6 +22,7 @@ def _workspace_row(workspace: Workspace, members: int, profiles: int) -> AdminWo
         archived_at=workspace.archived_at,
         profile_quota=workspace.profile_quota,
         member_quota=workspace.member_quota,
+        manual_run_cooldown_seconds=workspace.manual_run_cooldown_seconds,
         profile_count=profiles,
         member_count=members,
         created_at=workspace.created_at,
@@ -89,9 +90,11 @@ def update_workspace_quotas(
     previous = {
         "profile_quota": workspace.profile_quota,
         "member_quota": workspace.member_quota,
+        "manual_run_cooldown_seconds": workspace.manual_run_cooldown_seconds,
     }
     workspace.profile_quota = payload.profile_quota
     workspace.member_quota = payload.member_quota
+    workspace.manual_run_cooldown_seconds = payload.manual_run_cooldown_seconds
     db.add(
         AuditEvent(
             workspace_id=workspace.id,

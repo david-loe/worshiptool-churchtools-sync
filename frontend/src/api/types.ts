@@ -374,6 +374,7 @@ export interface AdminWorkspace {
   archived_at: string | null
   profile_quota: number
   member_quota: number
+  manual_run_cooldown_seconds: 0 | 300 | 900 | 1800
   profile_count: number
   member_count: number
   created_at: string

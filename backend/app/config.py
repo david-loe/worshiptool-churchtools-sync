@@ -180,7 +180,6 @@ class Settings(BaseSettings):
     verification_resend_cooldown_seconds: int = Field(default=300, ge=30, le=3600)
     recovery_ttl_seconds: int = 60 * 30
     admin_mfa_max_age_seconds: int = Field(default=60 * 60 * 12, ge=300, le=604800)
-    manual_run_cooldown_seconds: int = 60 * 30
     workspace_quota_per_user: int = 1
     invite_resend_cooldown_seconds: int = Field(default=300, ge=30, le=3600)
     max_connections_per_workspace: int = Field(default=20, ge=2, le=1000)
