@@ -5,6 +5,7 @@ from __future__ import annotations
 import unicodedata
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from itertools import groupby
 from zoneinfo import ZoneInfo
 
 from .models import (
@@ -132,7 +133,7 @@ def match_events(
                 )
             )
             continue
-        candidates.sort(key=lambda event: (event.starts_at, event.id))
+        candidates.sort(key=lambda event: (event.starts_at.astimezone(timezone.utc), event.id))
         if not candidates:
             result.append(
                 EventMatch(
@@ -142,23 +143,34 @@ def match_events(
                     (PlanIssue("event_not_found", "Kein passendes ChurchTools-Event gefunden"),),
                 )
             )
-        elif len(candidates) > 1:
-            result.append(
-                EventMatch(
-                    source,
-                    None,
-                    EventPlanStatus.AMBIGUOUS,
-                    (
-                        PlanIssue(
-                            "event_ambiguous",
-                            "Mehrere ChurchTools-Events passen zum WorshipTools-Service",
-                            details={"candidate_ids": [candidate.id for candidate in candidates]},
-                        ),
-                    ),
-                )
-            )
         else:
-            result.append(EventMatch(source, candidates[0], EventPlanStatus.READY))
+            for instant, events in groupby(
+                candidates, key=lambda event: event.starts_at.astimezone(timezone.utc)
+            ):
+                at_time = tuple(events)
+                if profile.match_mode is MatchMode.EXACT_TIME and len(at_time) > 1:
+                    result.append(
+                        EventMatch(
+                            source,
+                            None,
+                            EventPlanStatus.AMBIGUOUS,
+                            (
+                                PlanIssue(
+                                    "event_ambiguous",
+                                    "Mehrere ChurchTools-Events passen zur selben WorshipTools-Startzeit",
+                                    details={
+                                        "starts_at": instant.isoformat(),
+                                        "candidate_ids": [event.id for event in at_time],
+                                    },
+                                ),
+                            ),
+                        )
+                    )
+                else:
+                    result.extend(
+                        EventMatch(source, target, EventPlanStatus.READY)
+                        for target in at_time
+                    )
 
     # A target may never be written by two source services in the same run.
     target_counts: dict[str, int] = {}
@@ -166,24 +178,34 @@ def match_events(
         if match.target:
             target_counts[match.target.id] = target_counts.get(match.target.id, 0) + 1
     final: list[EventMatch] = []
-    for match in result:
-        if match.target and target_counts[match.target.id] > 1:
+    for _, source_matches in groupby(result, key=lambda match: match.source.id):
+        matches = tuple(source_matches)
+        issues: list[PlanIssue] = []
+        retained: list[EventMatch] = []
+        for match in matches:
+            if match.status is EventPlanStatus.AMBIGUOUS:
+                issues.extend(match.issues)
+            elif match.target and target_counts[match.target.id] > 1:
+                issues.append(
+                    PlanIssue(
+                        "target_event_reused",
+                        "Mehrere WorshipTools-Services würden dasselbe ChurchTools-Event verändern",
+                        details={
+                            "target_event_id": match.target.id,
+                            "starts_at": match.target.starts_at.astimezone(timezone.utc).isoformat(),
+                        },
+                    )
+                )
+            else:
+                retained.append(match)
+        # One diagnostic result per source, alongside its independent targets.
+        if issues:
             final.append(
                 EventMatch(
-                    match.source,
-                    None,
-                    EventPlanStatus.AMBIGUOUS,
-                    (
-                        PlanIssue(
-                            "target_event_reused",
-                            "Mehrere WorshipTools-Services würden dasselbe ChurchTools-Event verändern",
-                            details={"target_event_id": match.target.id},
-                        ),
-                    ),
+                    matches[0].source, None, EventPlanStatus.AMBIGUOUS, tuple(issues)
                 )
             )
-        else:
-            final.append(match)
+        final.extend(retained)
     return tuple(final)
 
 

@@ -284,8 +284,12 @@ class SyncPlanner:
         event_fingerprints: Mapping[tuple[str, str], str],
         config_fingerprint: str | None,
     ) -> EventPlan:
-        event_plan_id = stable_action_id(run_id, "event", match.source.id)
         target_event_id = match.target.id if match.target is not None else None
+        event_plan_id = (
+            stable_action_id(run_id, "event", match.source.id, "target", target_event_id)
+            if target_event_id is not None
+            else stable_action_id(run_id, "event", match.source.id, "unmatched")
+        )
         source_fingerprint = (
             event_fingerprints.get((match.source.id, target_event_id))
             if target_event_id is not None

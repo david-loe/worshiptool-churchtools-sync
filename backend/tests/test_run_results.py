@@ -3,6 +3,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
+import pytest
+
 from app.models import (
     SyncAction,
     SyncActionKind,
@@ -11,7 +13,7 @@ from app.models import (
     SyncRunStatus,
     SyncTrigger,
 )
-from app.run_results import build_run_result
+from app.run_results import action_ids_for_event, build_run_result
 from app.sync.models import (
     ActionKind,
     EventPlan,
@@ -54,7 +56,8 @@ def test_early_failure_produces_one_synthetic_failed_result() -> None:
     assert result.events[0].messages[0].code == "provider"
 
 
-def test_verified_song_is_assigned_to_every_dependent_event() -> None:
+@pytest.mark.parametrize("same_source", [False, True])
+def test_verified_song_is_assigned_to_every_dependent_event(same_source) -> None:
     create = PlannedAction(
         id="1" * 32,
         ordinal=0,
@@ -84,7 +87,7 @@ def test_verified_song_is_assigned_to_every_dependent_event() -> None:
         events.append(
             EventPlan(
                 id=event_id,
-                source_event_id=f"source-{index}",
+                source_event_id="source" if same_source else f"source-{index}",
                 target_event_id=f"target-{index}",
                 status=EventPlanStatus.READY,
                 source_event_name=f"Service {index}",
@@ -134,6 +137,10 @@ def test_verified_song_is_assigned_to_every_dependent_event() -> None:
         "ct-song",
     ]
     assert all(event.new_songs[0].ccli is None for event in result.events)
+    for index, event in enumerate(result.events):
+        assert event.target_event_id == f"target-{index}"
+        assert event.action_total == 1
+        assert action_ids_for_event(plan, event.id) == (uuid.UUID(event_actions[index].id),)
 
 
 def test_dry_run_ready_event_remains_planned() -> None:

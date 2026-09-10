@@ -16,6 +16,7 @@ from app.models import (
     ProviderConnection,
     ProviderType,
     RemoteBinding,
+    SyncAction,
     SyncProfile,
     SyncRun,
     SyncRunStatus,
@@ -37,13 +38,19 @@ from app.sync.models import (
     ActionExecution,
     ActionKind,
     ActionStatus,
+    Agenda,
+    AgendaItem,
     EventPlan,
     EventPlanStatus,
     Ownership,
     PlannedAction,
     RunStatus,
+    SourceEvent,
+    SourceSong,
     SyncPlan,
+    TargetEvent,
 )
+from app.sync.planner import SyncPlanner
 
 
 NOW = datetime(2026, 8, 22, 10, 0, tzinfo=timezone.utc)
@@ -333,6 +340,56 @@ def test_sql_run_repository_claim_plan_recovery_and_owner_checked_finish(
     finished = db.get(SyncRun, run.id)
     assert finished.status == SyncRunStatus.SUCCEEDED
     assert finished.lease_owner is None
+
+
+def test_multi_target_plan_persists_separate_actions_and_checkpoints(
+    database, db, settings
+) -> None:
+    workspace, source, target = _seed_connections(db, settings)
+    profile_row = _profile(db, workspace, source, target, "Multiple times")
+    run = _run(db, profile_row, status=SyncRunStatus.QUEUED)
+    run_id = str(run.id)
+    db.commit()
+    repository = SqlRunRepository(database)
+    specification = asyncio.run(repository.claim(run_id, "owner", 300))
+    starts = (NOW, NOW + timedelta(hours=2))
+    targets = tuple(
+        TargetEvent(f"ct-{index}", "Gottesdienst", start)
+        for index, start in enumerate(starts)
+    )
+    plan = SyncPlanner().plan(
+        run_id=run_id,
+        profile=specification.profile,
+        created_at=NOW,
+        source_events=(SourceEvent("wt", "Service", starts, ("song",)),),
+        target_events=targets,
+        source_songs=(SourceSong("song", "New Song", "Artist", "123"),),
+        target_songs=(),
+        agendas={
+            event.id: Agenda(
+                event.id, (AgendaItem(f"header-{event.id}", 0, "header", "Lobpreis"),)
+            )
+            for event in targets
+        },
+        ownerships={},
+        event_fingerprints={("wt", target.id): "a" * 64 for target in targets},
+        config_fingerprint="b" * 64,
+    )
+
+    asyncio.run(repository.persist_plan(run_id, plan, "owner"))
+    assert asyncio.run(repository.load_plan(run_id)) == plan
+    db.expire_all()
+    rows = db.scalars(select(SyncAction).where(SyncAction.run_id == run.id)).all()
+    assert len(rows) == 3  # One shared song creation, one insert per target.
+    for event in plan.events:
+        row = next(row for row in rows if row.id == uuid.UUID(event.actions[0].id))
+        assert row.source_id == "wt"
+        assert row.event_id == event.target_event_id
+        asyncio.run(repository.record_event_synced(run_id, event, "owner"))
+    states = asyncio.run(repository.event_sync_states(
+        str(profile_row.id), (("wt", "ct-0"), ("wt", "ct-1"))
+    ))
+    assert set(states) == {("wt", "ct-0"), ("wt", "ct-1")}
 
 
 def test_persisted_legacy_event_filters_are_visible_and_canonical_for_worker(
