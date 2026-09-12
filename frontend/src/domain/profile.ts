@@ -1,5 +1,43 @@
 import type { SyncProfile, SyncProfileInput } from '@/api/types'
 
+type SongSelectionInput = { song_start: unknown; song_end?: unknown }
+
+/** Zero-based pairs of placements that share a source position for some setlist length. */
+export function overlappingSongSelections(placements: readonly SongSelectionInput[]): [number, number][] {
+  const bounds = placements.map((placement) => {
+    const start = integerValue(placement.song_start)
+    const rawEnd = placement.song_end
+    const openEnd = rawEnd === null || rawEnd === undefined || String(rawEnd).trim() === ''
+    const end = openEnd ? null : integerValue(rawEnd)
+    if (start === null || (!openEnd && end === null)) return null
+
+    // A song has index i >= 0 and distance d = length - i >= 1 from the end.
+    // Positive boundaries constrain i; negative boundaries constrain d.
+    // Any integer pair (i, d) gives a valid setlist length i + d, so overlap
+    // exists exactly when both intersections below are nonempty. This also
+    // handles Python's clipping of slices without enumerating setlist lengths.
+    return {
+      firstIndex: start >= 0 ? start : 0,
+      endIndex: end !== null && end >= 0 ? end : Infinity,
+      excludedFromEnd: end !== null && end < 0 ? -end : 0,
+      maxDistanceFromEnd: start < 0 ? -start : Infinity,
+    }
+  })
+  const overlaps: [number, number][] = []
+  for (const [index, left] of bounds.entries()) {
+    if (!left) continue
+    for (let otherIndex = index + 1; otherIndex < bounds.length; otherIndex++) {
+      const right = bounds[otherIndex]
+      if (!right) continue
+      if (
+        Math.max(left.firstIndex, right.firstIndex) < Math.min(left.endIndex, right.endIndex)
+        && Math.max(left.excludedFromEnd, right.excludedFromEnd) < Math.min(left.maxDistanceFromEnd, right.maxDistanceFromEnd)
+      ) overlaps.push([index, otherIndex])
+    }
+  }
+  return overlaps
+}
+
 export function describeSongSelection(songStart: unknown, songEnd: unknown): string {
   const start = integerValue(songStart)
   const endIsOpen = songEnd === null || songEnd === undefined || String(songEnd).trim() === ''

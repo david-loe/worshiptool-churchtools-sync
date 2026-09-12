@@ -252,9 +252,24 @@ class ChurchToolsClient:
         defaults: Mapping[str, Any],
         action_id: str,
     ) -> AgendaItem:
+        # `defaults` stays in the provider signature for persisted plans, but
+        # applies only to inserts. Read the current slot, not a stale plan
+        # snapshot. The agenda DTO deliberately omits these display settings.
+        response = await self._get(f"events/{event_id}/agenda")
+        data = expect_mapping(expect_mapping(response, "root").get("data"), "data")
+        items = [
+            expect_mapping(value, "agenda item")
+            for value in expect_list(data.get("items"), "items")
+        ]
+        current = next((item for item in items if str(item.get("id")) == item_id), None)
+        if current is None or current.get("type") != "song":
+            raise ConflictError(
+                "The agenda song to replace no longer exists", agenda_item_id=item_id
+            )
+        payload = _agenda_replacement_payload(arrangement_id, current)
         try:
             response = await self._write(
-                "PUT", f"events/{event_id}/agenda/items/{item_id}", _agenda_payload(arrangement_id, defaults)
+                "PUT", f"events/{event_id}/agenda/items/{item_id}", payload
             )
             return _parse_written_agenda_song(
                 expect_mapping(response, "root").get("data"),
@@ -601,6 +616,32 @@ def _insert_position_matches(
         and len(after_items) == 1
         and after_items[0].id == candidate.id
     )
+
+
+def _agenda_replacement_payload(
+    arrangement_id: str, current: Mapping[str, Any]
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "type": "song",
+        "arrangementId": _positive_integer_id(arrangement_id, "ChurchTools arrangement ID"),
+    }
+    for key in ("title", "note", "responsible", "duration"):
+        if key not in current:
+            raise SchemaDriftError(f"ChurchTools agenda item lacks {key}")
+        value = current[key]
+        if key == "responsible" and isinstance(value, Mapping):
+            if "text" not in value:
+                raise SchemaDriftError("ChurchTools agenda item responsible lacks text")
+            value = value["text"]
+        if key == "duration":
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise SchemaDriftError("ChurchTools agenda item duration is not a nonnegative integer")
+        elif value is not None and not isinstance(value, str):
+            raise SchemaDriftError(f"ChurchTools agenda item {key} is not text or null")
+        payload[key] = value
+    # Position/timing are derived; service-group notes are separately managed
+    # and may only be partially visible to this account. Do not rewrite them.
+    return payload
 
 
 def _agenda_payload(arrangement_id: str, defaults: Mapping[str, Any]) -> dict[str, Any]:

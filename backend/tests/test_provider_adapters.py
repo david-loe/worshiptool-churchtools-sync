@@ -14,6 +14,7 @@ from app.providers.http import RetryPolicy, request_json
 from app.providers.worshiptools import WorshipToolsClient
 from app.sync.errors import (
     AuthenticationError,
+    ConflictError,
     IndeterminateWriteError,
     RateLimitError,
     SchemaDriftError,
@@ -631,6 +632,91 @@ def test_churchtools_does_not_claim_same_arrangement_at_wrong_position() -> None
                 "4", "8", {}, "action", before_item_id="text"
             )
         )
+
+
+@pytest.mark.parametrize("settings", [
+    {"title": "Eigener Titel", "note": "Direkt beginnen", "responsible": {"text": "[Worship Leader]", "persons": []}, "duration": 315},
+    {"title": "", "note": "", "responsible": {"text": "", "persons": []}, "duration": 0},
+    {"title": None, "note": None, "responsible": {"text": None, "persons": []}, "duration": 0},
+    {"title": "Slot", "note": None, "responsible": "Team", "duration": 120},
+])
+@pytest.mark.parametrize("write_response", ["success", "empty", "wrong_arrangement", "timeout"])
+def test_churchtools_replacement_preserves_current_slot_settings(settings: dict, write_response: str) -> None:
+    current = {
+        "id": 9, "position": 2, "type": "song", **settings,
+        "song": {"songId": 6, "arrangementId": 7},
+        "serviceGroupNotes": [{"serviceGroupId": 13, "note": "Keep the pad"}],
+        "start": "2026-01-01T10:05:00Z", "isBeforeEvent": False,
+        "startTimes": {"4": "2026-01-01T10:05:00Z"},
+    }
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/api/whoami":
+            return httpx.Response(200, json={"data": {"id": 1}})
+        if request.url.path == "/api/events/4/agenda" and request.method == "GET":
+            return httpx.Response(200, json={"data": {"items": [current]}})
+        if request.url.path == "/api/events/4/agenda/items/9" and request.method == "PUT":
+            payload = json.loads(request.content)
+            responsible = settings["responsible"]
+            assert payload == {
+                **settings,
+                "responsible": responsible["text"] if isinstance(responsible, dict) else responsible,
+                "type": "song", "arrangementId": 8,
+            }
+            assert not request.url.params
+            current["song"] = {"songId": 7, "arrangementId": 8}
+            if write_response == "empty":
+                return httpx.Response(200)
+            if write_response == "wrong_arrangement":
+                return httpx.Response(200, json={"data": {**current, "song": {"songId": 6, "arrangementId": 7}}})
+            if write_response == "timeout":
+                raise httpx.ReadTimeout("Committed but response lost", request=request)
+            return httpx.Response(200, json={"data": current})
+        raise AssertionError((request.method, request.url))
+
+    client = ChurchToolsClient("https://demo.church.tools", "secret", client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    item = run(client.replace_agenda_song(
+        "4", "9", "8",
+        {"title": "Overwrite", "note": "Overwrite", "responsible": "Overwrite", "duration": 999},
+        "action",
+    ))
+    assert item.id == "9"
+    assert item.arrangement_id == "8"
+    assert item.title == settings["title"]
+    assert sum(request.method == "PUT" for request in requests) == 1
+    assert requests[1].method == "GET"
+    assert requests[1].url.path == "/api/events/4/agenda"
+
+
+@pytest.mark.parametrize("change, error", [
+    ({"id": 10}, ConflictError),
+    ({"type": "text"}, ConflictError),
+    ({"duration": "300"}, SchemaDriftError),
+    ({"duration": None}, SchemaDriftError),
+    ({"duration": False}, SchemaDriftError),
+    ({"responsible": {"persons": []}}, SchemaDriftError),
+    ({"note": []}, SchemaDriftError),
+    ({"missing": "duration"}, SchemaDriftError),
+    ({"missing": "title"}, SchemaDriftError),
+])
+def test_churchtools_replacement_never_resets_unreadable_or_changed_slots(change: dict, error: type[Exception]) -> None:
+    current = {"id": 9, "type": "song", "title": "Slot", "note": None, "responsible": {"text": "Team"}, "duration": 300}
+    current.update(change)
+    if "missing" in change:
+        del current[change["missing"]]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        if request.url.path == "/api/whoami":
+            return httpx.Response(200, json={"data": {"id": 1}})
+        assert request.url.path == "/api/events/4/agenda"
+        return httpx.Response(200, json={"data": {"items": [current]}})
+
+    client = ChurchToolsClient("https://demo.church.tools", "secret", client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    with pytest.raises(error):
+        run(client.replace_agenda_song("4", "9", "8", {"duration": 0}, "action"))
 
 
 def test_request_json_accepts_empty_204_and_retries_safe_get() -> None:

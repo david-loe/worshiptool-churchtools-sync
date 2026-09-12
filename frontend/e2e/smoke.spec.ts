@@ -47,6 +47,60 @@ async function mockAuthenticatedApi(page: Page): Promise<void> {
   })
 }
 
+test('Profil warnt bei möglicher Song-Mehrfachverwendung und bleibt speicherbar', async ({ page }) => {
+  await mockAuthenticatedApi(page)
+  const overlappingProfile = {
+    ...profile,
+    placements: [
+      { id: 'worship', anchor: { item_type: 'header', title: 'Lobpreis' }, relation: 'after', multiple_anchor_policy: 'fail', song_start: 0, song_end: -1 },
+      { id: 'closing', anchor: { item_type: 'header', title: 'Abschluss' }, relation: 'after', multiple_anchor_policy: 'fail', song_start: -2, song_end: -1 },
+    ],
+  }
+  await page.route((url) => url.pathname === `/api/v1/workspaces/${workspace.id}/connections`, (route) => json(route, {
+    items: [
+      { id: 'source-1', provider: 'worshiptools', name: 'WorshipTools' },
+      { id: 'target-1', provider: 'churchtools', name: 'ChurchTools' },
+    ], total: 2, limit: 100, offset: 0,
+  }))
+  await page.route('**/connections/target-1/metadata', (route) => json(route, {
+    data: { calendars: [], campuses: [], song_categories: [{ id: '4', name: 'Lieder' }] },
+    retrieved_at: '2026-01-01T10:00:00Z',
+  }))
+  await page.route(`**/api/v1/workspaces/${workspace.id}/profiles/${profile.id}`, (route) =>
+    json(route, route.request().method() === 'PATCH'
+      ? { ...overlappingProfile, ...route.request().postDataJSON() }
+      : overlappingProfile))
+
+  await page.goto(`/profiles/${profile.id}`)
+  const placementSection = page.locator('#placement')
+  const warning = placementSection.getByRole('status')
+  const second = placementSection.locator('.repeat-card').nth(1)
+  await expect(warning).toContainText('Zielbereiche 1 und 2')
+  await expect(warning).toContainText('Songs mehrfach im Ablauf')
+  await expect(warning).toHaveAttribute('aria-live', 'polite')
+
+  await second.getByLabel('Erster Song (0-basiert)').fill('-1')
+  await second.getByLabel('Ende exklusiv (optional)').fill('')
+  await expect(warning).toBeEmpty()
+  await second.getByLabel('Erster Song (0-basiert)').fill('-2')
+  await expect(warning).toContainText('Zielbereiche 1 und 2')
+  await second.getByRole('button', { name: 'Entfernen' }).click()
+  await expect(warning).toBeEmpty()
+
+  await placementSection.getByRole('button', { name: 'Weiteren Zielbereich' }).click()
+  await second.getByLabel('Anker-Titel').fill('Abschluss')
+  await second.getByLabel('Erster Song (0-basiert)').fill('-2')
+  await second.getByLabel('Ende exklusiv (optional)').fill('-1')
+  await expect(warning).toContainText('Zielbereiche 1 und 2')
+  const saved = page.waitForRequest((request) => request.method() === 'PATCH' && request.url().endsWith(`/profiles/${profile.id}`))
+  await page.getByRole('button', { name: 'Profil speichern', exact: true }).click()
+  expect((await saved).postDataJSON().placements).toMatchObject([
+    { song_start: 0, song_end: -1 },
+    { song_start: -2, song_end: -1 },
+  ])
+  await expect(page).toHaveURL('/profiles')
+})
+
 test('öffentliche Anmeldung ist deutsch und zugänglich', async ({ page }) => {
   await page.route('**/api/v1/auth/me', (route) => json(route, { title: 'Nicht angemeldet', status: 401 }, 401))
   await page.goto('/login')

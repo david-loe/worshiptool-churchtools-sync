@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 import hashlib
 import json
 
+import pytest
+
 from app.sync.engine import SyncOrchestrator
 from app.sync.errors import AuthorizationError
 from app.sync.fingerprints import source_event_fingerprint, sync_config_fingerprint
@@ -34,6 +36,7 @@ from app.sync.models import (
     SyncMode,
     TargetEvent,
     TargetSong,
+    stable_action_id,
 )
 from app.sync.planner import SyncPlanner
 from app.sync.serialization import sync_plan_from_dict
@@ -333,7 +336,7 @@ def test_negative_song_boundaries_handle_one_or_no_songs() -> None:
     assert no_songs.events == ()
 
 
-def test_overlap_detection_uses_indexes_resolved_from_negative_boundaries() -> None:
+def test_overlapping_song_selections_are_allowed_without_run_warning() -> None:
     overlapping = _plan_split_placements(
         2,
         (
@@ -351,9 +354,70 @@ def test_overlap_detection_uses_indexes_resolved_from_negative_boundaries() -> N
         ),
     )
 
-    assert overlapping.events[0].status is EventPlanStatus.FAILED
-    assert overlapping.events[0].issues[0].code == "placement_overlap"
-    assert overlapping.events[0].issues[0].details["song_indexes"] == [1]
+    assert overlapping.events[0].status is EventPlanStatus.READY
+    assert overlapping.events[0].issues == ()
+    assert [action.payload["source_key"] for action in overlapping.events[0].actions] == [
+        "all:0:source-0", "all:1:source-1", "last:1:source-1",
+    ]
+
+
+@pytest.mark.parametrize("relation", list(AnchorRelation))
+@pytest.mark.parametrize("removed_placement", [0, 1])
+def test_repeated_song_placements_are_stable_and_cleaned_up_independently(
+    relation: AnchorRelation, removed_placement: int,
+) -> None:
+    start = dt("2026-01-01T10:00:00Z")
+    configured = replace(
+        profile(sync_mode=SyncMode.ENFORCE_SOURCE),
+        placements=(
+            PlacementRule("worship", AgendaAnchor(item_id="worship"), relation, song_end=-1),
+            PlacementRule("closing", AgendaAnchor(item_id="closing"), relation, song_start=-2, song_end=-1),
+        ),
+    )
+    source = FakeSourceProvider(
+        (SourceEvent("source", "Service", (start,), ("one", "two", "three")),),
+        tuple(source_song(key, str(i + 1)) for i, key in enumerate(("one", "two", "three"))),
+    )
+    target = FakeTargetProvider(
+        (TargetEvent("event", "Event", start),),
+        tuple(target_song(key, str(i + 1)) for i, key in enumerate(("one", "two", "three"))),
+        {"event": Agenda("event", (
+            AgendaItem("worship", 0, "header", "Lobpreis"),
+            AgendaItem("closing", 1, "header", "Abschluss"),
+        ))},
+    )
+    previous_ownerships = []
+    remaining_ids = set()
+    for attempt in range(3):
+        if attempt == 2:
+            retained = configured.placements[1 - removed_placement]
+            remaining_ids = {
+                row.agenda_item_id for row in previous_ownerships if row.placement_id == retained.id
+            }
+            configured = replace(configured, revision=configured.revision + 1, placements=(retained,))
+        run_id = f"repeat-song-{attempt}"
+        repository = MemoryRunRepository(RunSpecification(run_id, "workspace", "wt", "ct", configured))
+        repository.ownership_rows = list(previous_ownerships)
+        target.writes.clear()
+        status = asyncio.run(SyncOrchestrator(
+            repository, StaticProviderRegistry(source, target),
+            clock=type("Clock", (), {"now": lambda self: start})(),
+            event_leases=MemoryEventLeaseManager(),
+        ).execute(run_id))
+
+        assert status is RunStatus.SUCCEEDED
+        assert repository.plan.events[0].issues == ()
+        song_items = [item for item in target.agendas["event"].items if item.type == "song"]
+        if attempt < 2:
+            assert [item.song_id for item in song_items] == ["one", "two", "two"]
+            assert len(repository.ownership_rows) == 3
+            assert len({row.source_key for row in repository.ownership_rows}) == 3
+        else:
+            assert {item.id for item in song_items} == remaining_ids
+            assert {row.agenda_item_id for row in repository.ownership_rows} == remaining_ids
+        if attempt == 1:
+            assert target.writes == []
+        previous_ownerships = repository.ownership_rows
 
 
 def test_event_matching_supports_exact_instant_and_local_date() -> None:
@@ -424,6 +488,157 @@ def test_ambiguous_event_does_not_create_any_of_its_other_missing_songs() -> Non
 
     assert plan.events[0].status is EventPlanStatus.AMBIGUOUS
     assert plan.preparation_actions == ()
+
+
+@pytest.mark.parametrize("relation", list(AnchorRelation))
+@pytest.mark.parametrize("slot_count", [0, 1, 2, 4])
+@pytest.mark.parametrize("song_count", [1, 3])
+def test_placements_reuse_slots_in_source_order_and_repeat_without_writes(
+    relation: AnchorRelation, slot_count: int, song_count: int,
+) -> None:
+    start = dt("2026-01-01T10:00:00Z")
+    source_ids = tuple(f"source-{i}" for i in range(song_count))
+    songs = tuple(target_song(f"target-{i}", str(i + 1)) for i in range(song_count))
+    source = FakeSourceProvider(
+        (SourceEvent("source", "Service", (start,), source_ids),),
+        tuple(source_song(key, str(i + 1)) for i, key in enumerate(source_ids)),
+    )
+    slots = [
+        AgendaItem(f"slot-{i}", i, "song", f"Slot title {i}", "old", "old-arr")
+        for i in range(slot_count)
+    ]
+    header = AgendaItem("header", 0, "header", "Lobpreis")
+    boundary = AgendaItem("boundary", 0, "text", "Predigt")
+    untouched = AgendaItem("untouched", 0, "song", "Elsewhere", "old", "old-arr")
+    if relation is AnchorRelation.BEFORE:
+        ordered = [untouched, boundary, *slots, header]
+        anchor_id = header.id
+        selected = slots[-song_count:]
+    else:
+        ordered = [header, *slots, boundary, untouched]
+        anchor_id = header.id if relation is AnchorRelation.AFTER else ordered[1].id
+        selected = slots[:song_count]
+        if relation is AnchorRelation.AT and not slots:
+            # AT a text may reuse its own earlier inserts, but not an
+            # unrelated human song already sitting directly before it.
+            ordered = [header, untouched, boundary]
+            anchor_id = boundary.id
+    initial = Agenda("event", tuple(replace(item, position=i) for i, item in enumerate(ordered)))
+    configured = replace(
+        profile(sync_mode=SyncMode.ENFORCE_SOURCE),
+        placements=(PlacementRule("main", AgendaAnchor(item_id=anchor_id), relation),),
+        agenda_item_defaults={"title": "Only new slots"},
+    )
+    target = FakeTargetProvider((TargetEvent("event", "Event", start),), songs, {"event": initial})
+    previous_ownerships = []
+    for attempt in range(2):
+        repository = MemoryRunRepository(RunSpecification(f"slots-{attempt}", "workspace", "wt", "ct", configured))
+        repository.ownership_rows = list(previous_ownerships)
+        target.writes.clear()
+        status = asyncio.run(SyncOrchestrator(
+            repository, StaticProviderRegistry(source, target),
+            clock=type("Clock", (), {"now": lambda self: dt("2026-01-01T00:00:00Z")})(),
+            event_leases=MemoryEventLeaseManager(),
+        ).execute(f"slots-{attempt}"))
+        assert status is RunStatus.SUCCEEDED
+        result = target.agendas["event"].items
+        if attempt == 0:
+            actions = repository.plan.events[0].actions
+            replaced_ids = [a.payload["agenda_item_id"] for a in actions if a.kind is ActionKind.REPLACE_ITEM]
+            assert replaced_ids == [item.id for item in selected]
+            assert sum(a.kind is ActionKind.INSERT_ITEM for a in actions) == max(0, song_count - slot_count)
+            offset = song_count - len(selected) if relation is AnchorRelation.BEFORE else 0
+            for i, slot in enumerate(selected):
+                actual = next(item for item in result if item.id == slot.id)
+                assert actual.title == slot.title
+                assert actual.song_id == songs[offset + i].id
+        else:
+            assert target.writes == []
+        assert [item.song_id for item in result if item.song_id != "old" and item.type == "song"] == [song.id for song in songs]
+        assert len(result) == len(initial.items) + max(0, song_count - slot_count)
+        for item in initial.items:
+            if item.id not in {slot.id for slot in selected}:
+                actual = next(value for value in result if value.id == item.id)
+                assert replace(actual, position=item.position) == item
+        previous_ownerships = repository.ownership_rows
+
+
+@pytest.mark.parametrize("anchor_type", ["song", "header", "text"])
+def test_before_at_agenda_start_inserts_without_replacing_anchor(anchor_type: str) -> None:
+    start = dt("2026-01-01T10:00:00Z")
+    configured = replace(profile(), placements=(PlacementRule("main", AgendaAnchor(item_id="anchor"), AnchorRelation.BEFORE),))
+    plan = SyncPlanner().plan(
+        run_id="before-start", profile=configured, created_at=start,
+        source_events=(SourceEvent("source", "Service", (start,), ("song",)),),
+        target_events=(TargetEvent("event", "Event", start),),
+        source_songs=(source_song("song", "123"),), target_songs=(target_song("desired", "123"),),
+        agendas={"event": Agenda("event", (AgendaItem("anchor", 0, anchor_type, "Anchor", "old", "old-arr"),))},
+        ownerships={},
+    )
+    action, = plan.events[0].actions
+    assert action.kind is ActionKind.INSERT_ITEM
+    assert action.payload["before_item_id"] == "anchor"
+
+
+def test_before_uses_selected_source_slice_and_preserves_song_anchor() -> None:
+    start = dt("2026-01-01T10:00:00Z")
+    configured = replace(
+        profile(),
+        placements=(PlacementRule(
+            "last-two", AgendaAnchor(item_id="anchor"), AnchorRelation.BEFORE, song_start=-2,
+        ),),
+    )
+    source_ids = ("one", "two", "three", "four")
+    plan = SyncPlanner().plan(
+        run_id="before-slice", profile=configured, created_at=start,
+        source_events=(SourceEvent("source", "Service", (start,), source_ids),),
+        target_events=(TargetEvent("event", "Event", start),),
+        source_songs=tuple(source_song(key, str(i + 1)) for i, key in enumerate(source_ids)),
+        target_songs=tuple(target_song(key, str(i + 1)) for i, key in enumerate(source_ids)),
+        agendas={"event": Agenda("event", (
+            AgendaItem("slot", 0, "song", "Slot", "old", "old-arr"),
+            AgendaItem("anchor", 1, "song", "Anchor", "anchor-song", "anchor-arr"),
+        ))},
+        ownerships={},
+    )
+    inserted, replaced = plan.events[0].actions
+    assert inserted.kind is ActionKind.INSERT_ITEM
+    assert inserted.payload["before_item_id"] == "slot"
+    assert inserted.payload["source_key"] == "last-two:2:three"
+    assert replaced.kind is ActionKind.REPLACE_ITEM
+    assert replaced.payload["agenda_item_id"] == "slot"
+    assert replaced.payload["source_key"] == "last-two:3:four"
+
+
+@pytest.mark.parametrize("relation", list(AnchorRelation))
+@pytest.mark.parametrize("other_profile", [False, True])
+def test_target_slot_conflicts_fail_without_writes(relation: AnchorRelation, other_profile: bool) -> None:
+    start = dt("2026-01-01T10:00:00Z")
+    slots = (
+        AgendaItem("header", 0, "header", "Lobpreis"),
+        AgendaItem("slot", 1, "song", "Existing", "old", "old-arr"),
+        AgendaItem("text", 2, "text", "Predigt"),
+        AgendaItem("outside", 3, "song", "Outside", "old", "old-arr"),
+    )
+    anchor_id = {AnchorRelation.BEFORE: "text", AnchorRelation.AT: "slot", AnchorRelation.AFTER: "header"}[relation]
+    placements = [PlacementRule("one", AgendaAnchor(item_id=anchor_id), relation, song_end=1)]
+    if not other_profile:
+        placements.append(PlacementRule("two", AgendaAnchor(item_id="header"), AnchorRelation.AFTER, song_start=1))
+    configured = replace(profile(), placements=tuple(placements))
+    plan = SyncPlanner().plan(
+        run_id="conflict", profile=configured, created_at=start,
+        source_events=(SourceEvent("source", "Service", (start,), ("one", "two")),),
+        target_events=(TargetEvent("event", "Event", start),),
+        source_songs=(source_song("one", "1"), source_song("two", "2")),
+        target_songs=(target_song("one", "1"), target_song("two", "2")),
+        agendas={"event": Agenda("event", slots)},
+        ownerships={"event": (Ownership("other", "event", "slot", "old", "main"),)} if other_profile else {},
+    )
+    assert plan.events[0].status is EventPlanStatus.FAILED
+    assert plan.events[0].actions == ()
+    assert plan.events[0].issues[0].code == (
+        "agenda_item_owned_by_other_profile" if other_profile else "placement_target_overlap"
+    )
 
 
 def test_planner_uses_source_wins_and_deletes_only_owned_items() -> None:
@@ -1293,8 +1508,29 @@ def test_insert_reconciliation_never_claims_preexisting_adjacent_song() -> None:
         agendas={"target": initial},
         ownerships={},
     )
-    action = persisted.events[0].actions[0]
-    assert action.kind is ActionKind.INSERT_ITEM
+    # A plan persisted by the previous planner inserted before the text even
+    # with an adjacent song. Keep exercising recovery of that durable INSERT,
+    # independently of the new planner's intentional slot reuse.
+    event_plan = persisted.events[0]
+    planned = event_plan.actions[0]
+    action = replace(
+        planned,
+        id=stable_action_id(
+            "preexisting-adjacent", ActionKind.INSERT_ITEM.value,
+            event_plan.id, str(planned.payload["source_key"]),
+        ),
+        kind=ActionKind.INSERT_ITEM,
+        payload={
+            **{
+                key: value for key, value in planned.payload.items()
+                if key not in {"agenda_item_id", "already_owned"}
+            },
+            "resource_key": "agenda:target:main:0:song",
+            "before_item_id": "text",
+            "initial_agenda_item_ids": [item.id for item in initial.items],
+        },
+    )
+    persisted = replace(persisted, events=(replace(event_plan, actions=(action,)),))
     assert "human-song" in action.payload["initial_agenda_item_ids"]
 
     # Only an unrelated human edit happened after planning. The existing song

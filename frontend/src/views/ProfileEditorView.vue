@@ -6,7 +6,7 @@ import LoadingState from '@/components/LoadingState.vue'
 import ErrorBanner from '@/components/ErrorBanner.vue'
 import { api, ApiError, errorMessage } from '@/api/client'
 import type { Connection, ProviderMetadata, ProviderOption, SyncProfile, SyncProfileInput, SyncRun } from '@/api/types'
-import { describeSongSelection, newProfile, profileInputFromProfile, sanitizeProfile } from '@/domain/profile'
+import { describeSongSelection, newProfile, overlappingSongSelections, profileInputFromProfile, sanitizeProfile } from '@/domain/profile'
 import { recoverableRunId } from '@/domain/run'
 import { useWorkspaceStore } from '@/stores/workspaces'
 import { useToastStore } from '@/stores/toasts'
@@ -30,6 +30,7 @@ const initialized = ref(false)
 const error = ref<string | null>(null)
 const sourceConnections = computed(() => connections.value.filter((item) => item.provider === 'worshiptools'))
 const targetConnections = computed(() => connections.value.filter((item) => item.provider === 'churchtools'))
+const songSelectionOverlaps = computed(() => overlappingSongSelections(form.value.placements))
 
 watch(form, () => { if (initialized.value) dirty.value = true }, { deep: true })
 
@@ -191,11 +192,18 @@ onMounted(load)
         <label><span>Campus-IDs</span><select v-if="campuses.length" v-model="rule.campus_ids" multiple><option v-for="option in campuses" :key="option.id" :value="option.id">{{ option.name }}</option></select><input v-else :value="rule.campus_ids.join(', ')" placeholder="Kommagetrennte IDs" @input="rule.campus_ids = ($event.target as HTMLInputElement).value.split(',').map(v => v.trim()).filter(Boolean)" /><small>Beschränkt die Regel auf diese ChurchTools-Campusse; leer bedeutet alle Campusse.</small></label>
       </div></article><button class="button button-secondary button-small" type="button" @click="addRule">Weitere Regel</button></div></section>
 
-      <section id="placement" class="card editor-section"><header><span>3</span><div><h2>Platzierung in ChurchTools</h2><p>Zugeordnete Song-Items werden verwaltet; fremde Header und Texte bleiben erhalten.</p></div></header>
-        <p class="form-hint">Alle gesetzten Ankermerkmale müssen gemeinsam passen. Pro Zielbereich legst du fest, ob mehrere Treffer fehlschlagen oder der erste in Agenda-Reihenfolge verwendet wird; jeder Song darf nur einem Zielbereich zugeordnet sein.</p>
+      <section id="placement" class="card editor-section"><header><span>3</span><div><h2>Platzierung in ChurchTools</h2><p>Vorhandene Songs im Zielbereich werden ersetzt. Dauer, eigener Titel, Notizen und Verantwortliche bleiben erhalten; Header und Texte bleiben bestehen.</p></div></header>
+        <p class="form-hint">Alle gesetzten Ankermerkmale müssen gemeinsam passen. Pro Zielbereich legst du fest, ob mehrere Treffer fehlschlagen oder der erste in Agenda-Reihenfolge verwendet wird. Derselbe Song darf mehreren Zielbereichen zugeordnet sein.</p>
+        <div aria-live="polite" role="status">
+          <div v-if="songSelectionOverlaps.length" class="alert alert-warning">
+            <strong>Mögliche Mehrfachverwendung von Songs</strong>
+            <span v-for="[first, second] in songSelectionOverlaps" :key="`${first}-${second}`">Die Songauswahl der Zielbereiche {{ first + 1 }} und {{ second + 1 }} kann sich überschneiden.</span>
+            <span>Dadurch können Songs mehrfach im Ablauf erscheinen. Das ist erlaubt; ob es passiert, hängt von der Songanzahl ab.</span>
+          </div>
+        </div>
         <div class="repeat-list"><article v-for="(placement, index) in form.placements" :key="index" class="repeat-card"><header><h3>Zielbereich {{ index + 1 }}</h3><button v-if="form.placements.length > 1" class="link-button danger-text" type="button" @click="removePlacement(index)">Entfernen</button></header><div class="form-grid">
           <label><span>Eindeutige Placement-ID</span><input v-model="placement.id" required maxlength="100" pattern="[A-Za-z0-9][A-Za-z0-9_.:-]*" placeholder="main" /><small>Dient als eindeutiger interner Schlüssel dieses Zielbereichs innerhalb des Profils.</small></label>
-          <label><span>Relation zum Anker</span><select v-model="placement.relation"><option value="before">Davor</option><option value="at">An dessen Position</option><option value="after">Danach</option></select><small>Legt fest, ob die Song-Auswahl vor, an der Position oder nach dem Anker beginnt.</small></label>
+          <label><span>Relation zum Anker</span><select v-model="placement.relation"><option value="before">Davor</option><option value="at">An dessen Position</option><option value="after">Danach</option></select><small>„Davor“ belegt die letzten zusammenhängenden Song-Slots unmittelbar vor dem Anker. Fehlende Slots werden davor ergänzt. „An dessen Position“ und „Danach“ beginnen beim beziehungsweise hinter dem Anker. Die Song-Reihenfolge bleibt erhalten.</small></label>
           <label><span>Bei mehreren Ankern</span><select v-model="placement.multiple_anchor_policy"><option value="fail">Ereignis mit Fehler beenden</option><option value="first">Ersten Treffer verwenden</option></select><small>„Erster Treffer“ verwendet die Agenda-Reihenfolge und speichert eine Warnung mit allen Treffern.</small></label>
           <label><span>Anker-Typ</span><input v-model="placement.anchor.item_type" placeholder="header" /><small>Optionaler ChurchTools-Agendatyp, zum Beispiel header, song oder text.</small></label><label><span>Anker-Titel</span><input v-model="placement.anchor.title" placeholder="Lobpreis" /><small>Optionaler vollständiger Titel; Groß-/Kleinschreibung und Satzzeichen werden vereinheitlicht.</small></label>
           <label><span>Anker-Item-ID (optional)</span><input v-model="placement.anchor.item_id" placeholder="Remote-ID" /><small>Mindestens Typ, Titel oder Item-ID ist nötig; die ID ist die präziseste Zuordnung.</small></label>
@@ -208,11 +216,11 @@ onMounted(load)
           <label v-if="form.create_missing_songs"><span>Name des Standard-Arrangements</span><input v-model="form.arrangement_name" required maxlength="50" /><small>Wird verwendet, wenn für einen Song ein neues Arrangement angelegt werden muss.</small></label>
         </div>
         <div class="form-grid standalone">
-          <div class="span-2"><h3>Standardwerte für Agenda-Songs</h3><p>Diese optionalen Werte werden auf jedes vom Sync verwaltete Song-Item angewendet. Leere Felder verwenden den ChurchTools-Standard.</p></div>
-          <label><span>Agenda-Titel</span><input v-model="form.agenda_item_defaults.title" maxlength="100" placeholder="Optionaler eigener Titel" /><small>Überschreibt optional den Titel jedes verwalteten Song-Items, maximal 100 Zeichen.</small></label>
-          <label><span>Verantwortlich</span><input v-model="form.agenda_item_defaults.responsible" maxlength="1000" placeholder="z. B. [Worship Leader]" /><small>Setzt Text oder ChurchTools-Platzhalter für jedes verwaltete Song-Item, maximal 1.000 Zeichen.</small></label>
-          <label><span>Dauer</span><div class="input-suffix"><input v-model.number="form.agenda_item_defaults.duration" type="number" min="0" max="86400" step="1" placeholder="0" /><span>Sekunden</span></div><small>Setzt die Dauer jedes verwalteten Song-Items zwischen 0 Sekunden und 24 Stunden.</small></label>
-          <label class="span-2"><span>Agenda-Notiz</span><textarea v-model="form.agenda_item_defaults.note" rows="3" maxlength="4000" placeholder="Optionale Hinweise für das Team"></textarea><small>Hinterlegt dieselbe optionale Notiz an jedem verwalteten Song-Item, maximal 4.000 Zeichen.</small></label>
+          <div class="span-2"><h3>Standardwerte für neue Agenda-Songs</h3><p>Diese optionalen Werte gelten nur für neu eingefügte Song-Items. Beim Ersetzen bleiben die Einstellungen des vorhandenen Eintrags erhalten. Leere Felder verwenden den ChurchTools-Standard.</p></div>
+          <label><span>Agenda-Titel</span><input v-model="form.agenda_item_defaults.title" maxlength="100" placeholder="Optionaler eigener Titel" /><small>Setzt einen eigenen Titel für neue Song-Items, maximal 100 Zeichen.</small></label>
+          <label><span>Verantwortlich</span><input v-model="form.agenda_item_defaults.responsible" maxlength="1000" placeholder="z. B. [Worship Leader]" /><small>Setzt Text oder ChurchTools-Platzhalter für neue Song-Items, maximal 1.000 Zeichen.</small></label>
+          <label><span>Dauer</span><div class="input-suffix"><input v-model.number="form.agenda_item_defaults.duration" type="number" min="0" max="86400" step="1" placeholder="0" /><span>Sekunden</span></div><small>Setzt die Dauer neuer Song-Items zwischen 0 Sekunden und 24 Stunden. Zusätzliche Einträge können berechnete Startzeiten verschieben.</small></label>
+          <label class="span-2"><span>Agenda-Notiz</span><textarea v-model="form.agenda_item_defaults.note" rows="3" maxlength="4000" placeholder="Optionale Hinweise für das Team"></textarea><small>Hinterlegt dieselbe optionale Notiz an neuen Song-Items, maximal 4.000 Zeichen.</small></label>
         </div>
       </section>
 

@@ -397,24 +397,12 @@ class SyncPlanner:
         items = tuple(sorted(agenda.items, key=lambda item: (item.position, item.id)))
         actions: list[PlannedAction] = []
         issues: list[PlanIssue] = []
-        used_source_indexes: set[int] = set()
         reserved_item_ids: set[str] = set()
         desired_keys: set[str] = set()
         ownership_by_item = {ownership.agenda_item_id: ownership for ownership in ownerships}
 
         for placement in profile.placements:
             indexes = tuple(range(len(source_event.song_ids)))[placement.song_start : placement.song_end]
-            overlap = used_source_indexes.intersection(indexes)
-            if overlap:
-                issues.append(
-                    PlanIssue(
-                        "placement_overlap",
-                        "Song-Platzierungen überschneiden sich",
-                        details={"placement_id": placement.id, "song_indexes": sorted(overlap)},
-                    )
-                )
-                continue
-            used_source_indexes.update(indexes)
             anchors = [item for item in items if _anchor_matches(placement.anchor, item)]
             if not anchors:
                 issues.append(
@@ -452,24 +440,44 @@ class SyncPlanner:
                     )
                 )
             anchor_index = items.index(selected_anchor)
+            leading_inserts = 0
             if placement.relation.value == "before":
                 cursor = anchor_index
+                while (
+                    cursor > 0
+                    and anchor_index - cursor < len(indexes)
+                    and items[cursor - 1].type == "song"
+                ):
+                    cursor -= 1
+                # Align the source selection with the anchor: missing slots
+                # precede existing ones, and the anchor is never replaced.
+                leading_inserts = len(indexes) - (anchor_index - cursor)
             elif placement.relation.value == "after":
                 cursor = anchor_index + 1
             else:
                 cursor = anchor_index
+                # AT a non-song inserts immediately before it. On later runs
+                # start at this placement's existing block, not at the text
+                # again; unrelated songs preceding the anchor stay outside.
+                if selected_anchor.type != "song":
+                    while cursor > 0 and items[cursor - 1].type == "song":
+                        owner = ownership_by_item.get(items[cursor - 1].id)
+                        if (
+                            owner is None
+                            or owner.profile_id != profile.id
+                            or owner.placement_id != placement.id
+                        ):
+                            break
+                        cursor -= 1
 
             last_item_id: str | None = items[cursor - 1].id if cursor > 0 else None
             last_item_key: str | None = None
-            for source_index in indexes:
+            for selection_index, source_index in enumerate(indexes):
                 song_id = source_event.song_ids[source_index]
                 resource = resources[song_id]
                 source_key = f"{placement.id}:{source_index}:{song_id}"
                 desired_keys.add(source_key)
                 current = items[cursor] if cursor < len(items) else None
-                while current is not None and current.id in reserved_item_ids:
-                    cursor += 1
-                    current = items[cursor] if cursor < len(items) else None
 
                 base_payload = {
                     "profile_id": profile.id,
@@ -479,7 +487,23 @@ class SyncPlanner:
                     "defaults": dict(profile.agenda_item_defaults),
                     **resource.payload(),
                 }
-                if current is not None and current.type == "song":
+                if (
+                    selection_index >= leading_inserts
+                    and current is not None
+                    and current.type == "song"
+                ):
+                    if current.id in reserved_item_ids:
+                        issues.append(
+                            PlanIssue(
+                                "placement_target_overlap",
+                                "Mehrere Song-Platzierungen verwenden denselben Ziel-Slot",
+                                details={
+                                    "placement_id": placement.id,
+                                    "agenda_item_id": current.id,
+                                },
+                            )
+                        )
+                        break
                     current_ownership = ownership_by_item.get(current.id)
                     if current_ownership and current_ownership.profile_id != profile.id:
                         issues.append(

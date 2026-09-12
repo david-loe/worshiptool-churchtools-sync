@@ -144,13 +144,10 @@ class FakeTargetProvider(TargetProvider):
         agenda = await self.get_agenda(event_id)
         items = list(agenda.items)
         index = next(index for index, item in enumerate(items) if item.id == item_id)
-        items[index] = AgendaItem(
-            item_id,
-            index,
-            "song",
-            str(defaults.get("title") or ""),
-            self._song_for_arrangement(arrangement_id),
-            arrangement_id,
+        items[index] = replace(
+            items[index],
+            song_id=self._song_for_arrangement(arrangement_id),
+            arrangement_id=arrangement_id,
         )
         self._store_agenda(event_id, items)
         return items[index]
@@ -299,6 +296,16 @@ class MemoryRunRepository:
         self, run_id: str, ownership: Ownership, owner_token: str
     ) -> None:
         self._assert_owner(owner_token)
+        # Match the SQL repository's update of an existing agenda-item binding.
+        for index, existing in enumerate(self.ownership_rows):
+            if (
+                existing.target_event_id == ownership.target_event_id
+                and existing.agenda_item_id == ownership.agenda_item_id
+            ):
+                if existing.profile_id != ownership.profile_id:
+                    raise ConcurrentModificationError("Agenda item is already owned by another sync profile")
+                self.ownership_rows[index] = ownership
+                return
         self.ownership_rows.append(ownership)
 
     async def unbind_ownership(

@@ -1,7 +1,81 @@
 import { describe, expect, it } from 'vitest'
 import { reactive } from 'vue'
 import type { ProviderMetadata, SyncProfile, SyncProfileInput } from '@/api/types'
-import { describeSongSelection, newProfile, profileInputFromProfile, sanitizeProfile } from './profile'
+import { describeSongSelection, newProfile, overlappingSongSelections, profileInputFromProfile, sanitizeProfile } from './profile'
+
+describe('Mögliche Mehrfachverwendung von Songs', () => {
+  it.each([
+    [0, -1, -2, -1, true],
+    [0, -1, -1, null, false],
+    [0, null, -1, null, true],
+    [0, 2, 1, 3, true],
+    [0, 2, 2, null, false],
+    [-4, -2, -3, -1, true],
+    [-4, -2, -2, null, false],
+    [0, 1, -1, null, true], // Overlaps only for a one-song setlist.
+    [-2, 3, 2, -1, true],
+    [-2, 3, 3, null, false],
+    [2, 2, 0, null, false],
+    [3, 2, 0, null, false],
+    [-2, -3, 0, null, false],
+    [-2, 0, 0, null, false],
+    [1_000_000_000, null, -2, -1, true],
+    [0, -1_000_000_000, -1_000_000_000, null, false],
+  ])('prüft [%s:%s] und [%s:%s]', (start, end, otherStart, otherEnd, expected) => {
+    expect(overlappingSongSelections([
+      { song_start: start, song_end: end },
+      { song_start: otherStart, song_end: otherEnd },
+    ])).toEqual(expected ? [[0, 1]] : [])
+  })
+
+  it('nennt alle betroffenen Paare mit ihren ursprünglichen Positionen', () => {
+    expect(overlappingSongSelections([
+      { song_start: 0 },
+      { song_start: '', song_end: null },
+      { song_start: -2, song_end: -1 },
+      { song_start: -2, song_end: null },
+    ])).toEqual([[0, 2], [0, 3], [2, 3]])
+    expect(overlappingSongSelections([])).toEqual([])
+    expect(overlappingSongSelections([{ song_start: 0 }])).toEqual([])
+  })
+
+  it.each([
+    { song_start: null },
+    { song_start: 1.5 },
+    { song_start: NaN },
+    { song_start: Infinity },
+    { song_start: 0, song_end: 'invalid' },
+    { song_start: 0, song_end: 1.5 },
+  ])('ignoriert ungültige Eingabezwischenstände %j', (invalid) => {
+    expect(overlappingSongSelections([invalid, { song_start: 0 }])).toEqual([])
+  })
+
+  it.each([null, undefined, '', '  '])('behandelt %j als offenes Ende', (end) => {
+    expect(overlappingSongSelections([
+      { song_start: '0', song_end: end },
+      { song_start: '-1', song_end: end },
+    ])).toEqual([[0, 1]])
+  })
+
+  it('stimmt für kleine Grenzwerte mit tatsächlichen Listenausschnitten überein', () => {
+    const boundaries = [-3, -2, -1, 0, 1, 2, 3]
+    const selections = boundaries.flatMap((start) => [...boundaries, null].map((end) => ({
+      song_start: start, song_end: end,
+    })))
+    const lists = Array.from({ length: 9 }, (_, length) => Array.from({ length }, (_, i) => i))
+    for (const left of selections) {
+      for (const right of selections) {
+        const expected = lists.some((list) => {
+          const first = list.slice(left.song_start, left.song_end ?? undefined)
+          const second = list.slice(right.song_start, right.song_end ?? undefined)
+          return first.some((index) => second.includes(index))
+        })
+        expect(overlappingSongSelections([left, right]), JSON.stringify([left, right]))
+          .toEqual(expected ? [[0, 1]] : [])
+      }
+    }
+  })
+})
 
 describe('Profilmodell', () => {
   it.each([
