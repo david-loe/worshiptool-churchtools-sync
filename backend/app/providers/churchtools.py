@@ -14,6 +14,7 @@ import httpx
 
 from ..sync.errors import ConflictError, IndeterminateWriteError, SchemaDriftError
 from ..sync.matching import match_song, normalize_text
+from ..sync.keys import key_matches, select_arrangement
 from ..sync.models import (
     Agenda,
     AgendaItem,
@@ -166,6 +167,8 @@ class ChurchToolsClient:
             "ccli": payload.get("ccli") or None,
             "arrangements": [{"name": payload["arrangement_name"], "isDefault": True}],
         }
+        if payload.get("key") is not None:
+            body["arrangements"][0]["key"] = payload["key"]
         try:
             response = await self._write("POST", "songs", body)
             song = _parse_song(expect_mapping(response, "root").get("data"))
@@ -184,22 +187,36 @@ class ChurchToolsClient:
             raise SchemaDriftError("ChurchTools created a song without the inline default arrangement")
         return song
 
-    async def create_arrangement(self, song_id: str, name: str, action_id: str) -> Arrangement:
+    async def create_arrangement(
+        self, song_id: str, name: str, action_id: str, *, key: str | None = None
+    ) -> Arrangement:
         await self._ensure_validated()
-        song = await self.get_song(song_id)
-        matches = [item for item in song.arrangements if normalize_text(item.name) == normalize_text(name)]
-        if len(matches) == 1:
-            return matches[0]
-        if len(matches) > 1:
-            raise ConflictError("Arrangement reconciliation is ambiguous", song_id=song_id)
-        try:
-            response = await self._write("POST", f"songs/{song_id}/arrangements", {"name": name, "isDefault": True})
-            return _parse_arrangement(expect_mapping(response, "root").get("data"))
-        except (IndeterminateWriteError, SchemaDriftError):
+
+        async def existing() -> Arrangement | None:
             song = await self.get_song(song_id)
+            if key is not None:
+                return select_arrangement(song.arrangements, key)
             matches = [item for item in song.arrangements if normalize_text(item.name) == normalize_text(name)]
-            if len(matches) == 1:
-                return matches[0]
+            if len(matches) > 1:
+                raise ConflictError("Arrangement reconciliation is ambiguous", song_id=song_id)
+            return matches[0] if matches else None
+
+        found = await existing()
+        if found is not None:
+            return found
+        body: dict[str, Any] = {"name": name}
+        if key is not None:
+            body["key"] = key
+        try:
+            response = await self._write("POST", f"songs/{song_id}/arrangements", body)
+            arrangement = _parse_arrangement(expect_mapping(response, "root").get("data"))
+            if not key_matches(arrangement.key, key):
+                raise SchemaDriftError("ChurchTools created arrangement lacks the expected key")
+            return arrangement
+        except (IndeterminateWriteError, SchemaDriftError):
+            found = await existing()
+            if found is not None:
+                return found
             raise
 
     async def insert_agenda_song(
@@ -306,7 +323,10 @@ class ChurchToolsClient:
         if matched.target is None:
             return None
         arrangement_name = normalize_text(str(payload["arrangement_name"]))
-        if not any(normalize_text(item.name) == arrangement_name for item in matched.target.arrangements):
+        if not any(
+            normalize_text(item.name) == arrangement_name and key_matches(item.key, payload.get("key"))
+            for item in matched.target.arrangements
+        ):
             raise SchemaDriftError(
                 "Reconciled ChurchTools song exists without the required atomic arrangement",
                 song_id=matched.target.id,
@@ -496,7 +516,7 @@ def _parse_arrangement(value: Any) -> Arrangement:
     item = expect_mapping(value, "arrangement")
     if item.get("id") is None or not isinstance(item.get("name"), str):
         raise SchemaDriftError("ChurchTools arrangement lacks id or name")
-    return Arrangement(str(item["id"]), item["name"], bool(item.get("isDefault")))
+    return Arrangement(str(item["id"]), item["name"], bool(item.get("isDefault")), _parse_key(item.get("key")))
 
 
 def _parse_song(value: Any, *, require_arrangements: bool = False) -> TargetSong:
@@ -534,7 +554,16 @@ def _parse_agenda_item(value: Any, fallback_position: int) -> AgendaItem:
             if song.get("arrangementId") is not None
             else (str(item["arrangementId"]) if item.get("arrangementId") is not None else None)
         ),
+        key=_parse_key(song.get("key")),
     )
+
+
+def _parse_key(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise SchemaDriftError("ChurchTools musical key is not text")
+    return value.strip() or None
 
 
 def _parse_written_agenda_song(

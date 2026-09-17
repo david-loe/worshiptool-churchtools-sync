@@ -7,7 +7,7 @@ import { api, ApiError, errorMessage } from '@/api/client'
 import { connectionPayload, connectionUpdatePayload } from '@/domain/connection'
 import { connectionContinuation, profileContinuation } from '@/domain/onboarding'
 import { newProfile, profileInputFromProfile, sanitizeProfile } from '@/domain/profile'
-import { recoverableRunId } from '@/domain/run'
+import { actionDescription, recoverableRunId } from '@/domain/run'
 import { useWorkspaceStore } from '@/stores/workspaces'
 
 const router = useRouter()
@@ -361,7 +361,7 @@ onBeforeUnmount(() => { if (previewPollTimer) window.clearTimeout(previewPollTim
         <div v-if="loading" class="loading-state"><span class="spinner" />Vorschau wird erstellt …</div>
         <div v-else-if="preview" class="preview-box">
           <div class="preview-summary"><strong>{{ previewApproved ? 'Vorschau abgeschlossen' : preview.status === 'failed' || preview.status === 'skipped' ? 'Vorschau nicht erfolgreich' : 'Vorschau wird berechnet' }}</strong><StatusBadge :status="preview.status" /></div>
-          <ol v-if="previewActions.length" class="action-list"><li v-for="action in previewActions" :key="action.id"><span>{{ action.kind }}</span><strong>{{ String(action.payload.description || action.kind) }}</strong></li></ol>
+          <ol v-if="previewActions.length" class="action-list"><li v-for="action in previewActions" :key="action.id"><span>{{ action.kind }}</span><strong>{{ actionDescription(action) }}</strong></li></ol>
           <p v-if="preview.status === 'failed' || preview.status === 'skipped'" class="danger-text">Das Profil bleibt deaktiviert. Öffne die Historie für Details oder gehe zurück und korrigiere die Konfiguration.</p><p v-else-if="!previewActions.length">Die Vorschau verändert keine Remotedaten. Details erscheinen nach der Planung in der Historie.</p>
         </div>
         <div class="wizard-actions"><button class="button button-secondary" type="button" @click="step = 3">Zurück</button><div class="wizard-action-options"><RouterLink v-if="savedProfile" class="button button-secondary" :to="`/profiles/${savedProfile.id}`">Alle Einstellungen bearbeiten</RouterLink><button v-if="preview?.status === 'failed' || preview?.status === 'skipped' || !preview" class="button button-secondary" type="button" :disabled="loading" @click="loadPreview">Vorschau erneut starten</button><button class="button button-primary" type="button" :disabled="loading || !previewApproved" @click="finish">Profil aktivieren</button></div></div>

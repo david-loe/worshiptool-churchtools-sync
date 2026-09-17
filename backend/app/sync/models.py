@@ -78,12 +78,16 @@ class SourceEvent:
     name: str
     starts_at: tuple[datetime, ...]
     song_ids: tuple[str, ...]
+    song_keys: tuple[str | None, ...] = ()
+    issues: tuple[PlanIssue, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.id:
             raise ValueError("source event id must not be empty")
         if not self.starts_at:
             raise ValueError("source event must contain at least one start time")
+        if self.song_keys and len(self.song_keys) != len(self.song_ids):
+            raise ValueError("source event keys must correspond to song occurrences")
         _require_aware(self.starts_at, "source event start")
 
 
@@ -106,6 +110,7 @@ class SourceSong:
     name: str
     artist: str
     ccli: str | None = None
+    key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +118,7 @@ class Arrangement:
     id: str
     name: str
     is_default: bool = False
+    key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +138,7 @@ class AgendaItem:
     title: str | None = None
     song_id: str | None = None
     arrangement_id: str | None = None
+    key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

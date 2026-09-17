@@ -30,6 +30,10 @@ class SourceProvider(Protocol):
 
     async def list_songs(self) -> Sequence[SourceSong]: ...
 
+    async def enrich_snapshot(
+        self, events: Sequence[SourceEvent], songs: Sequence[SourceSong]
+    ) -> tuple[Sequence[SourceEvent], Sequence[SourceSong]]: ...
+
 
 @runtime_checkable
 class TargetProvider(Protocol):
@@ -43,7 +47,9 @@ class TargetProvider(Protocol):
 
     async def create_song(self, payload: Mapping[str, Any], action_id: str) -> TargetSong: ...
 
-    async def create_arrangement(self, song_id: str, name: str, action_id: str) -> Arrangement: ...
+    async def create_arrangement(
+        self, song_id: str, name: str, action_id: str, *, key: str | None = None
+    ) -> Arrangement: ...
 
     async def insert_agenda_song(
         self,

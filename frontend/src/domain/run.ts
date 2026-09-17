@@ -1,7 +1,13 @@
 import { ApiError } from '@/api/client'
-import type { CreatedSongResult, RunEventResult, RunEventStatus } from '@/api/types'
+import type { CreatedSongResult, RunEventResult, RunEventStatus, SyncAction } from '@/api/types'
 
 const RECOVERABLE_RUN_CODES = new Set(['queue_unavailable', 'run_already_active'])
+
+export function actionDescription(action: Pick<SyncAction, 'kind' | 'payload'>): string {
+  const value = action.payload.description ?? action.payload.name ?? action.payload.song_name ?? action.kind
+  const key = action.payload.key
+  return typeof key === 'string' ? `${String(value)} · Tonart ${key}` : String(value)
+}
 
 export function runIdFromLocation(location: string | undefined, workspaceId: string): string | null {
   if (!location) return null

@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from datetime import datetime
 from typing import Any, Mapping, Sequence
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import httpx
 
-from ..sync.errors import AuthenticationError, SchemaDriftError
+from ..sync.errors import AuthenticationError, NotFoundError, SchemaDriftError
 from ..sync.models import SourceEvent, SourceSong
 
 from .http import RetryPolicy, Sleep, expect_list, expect_mapping, request_json
@@ -62,6 +64,8 @@ class WorshipToolsClient:
         self._sleep = sleep
         self._token: str | None = None
         self._login_lock = asyncio.Lock()
+        self._firebase_config: Mapping[str, Any] | None = None
+        self._firebase_token: str | None = None
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -84,6 +88,127 @@ class WorshipToolsClient:
 
     async def list_songs(self) -> Sequence[SourceSong]:
         return tuple(_parse_song(value) for value in await self._get_all("song", {"rows": 100}))
+
+    async def enrich_snapshot(
+        self, events: Sequence[SourceEvent], songs: Sequence[SourceSong]
+    ) -> tuple[Sequence[SourceEvent], Sequence[SourceSong]]:
+        """Read service-specific keys and Charts defaults for this snapshot only."""
+        if not events:
+            return events, songs
+        documents: dict[tuple[str, str], Mapping[str, Any]] = {}
+        total_bytes = 0
+
+        async def document(collection: str, identifier: str) -> Mapping[str, Any]:
+            nonlocal total_bytes
+            identity = (collection, identifier)
+            if identity not in documents:
+                if len(documents) >= _MAX_SNAPSHOT_RECORDS:
+                    raise SchemaDriftError("WorshipTools detail snapshot exceeded safety limit")
+                value = await self._firestore_document(collection, identifier)
+                total_bytes += len(json.dumps(value, ensure_ascii=True).encode("utf-8"))
+                if total_bytes > _MAX_SNAPSHOT_BYTES:
+                    raise SchemaDriftError("WorshipTools detail snapshot exceeded aggregate size limit")
+                documents[identity] = expect_mapping(value.get("data", {}), "document.data")
+            return documents[identity]
+
+        song_ids = {song.id for song in songs}
+        occurrences: list[tuple[SourceEvent, list[tuple[str, str | None]]]] = []
+        for event in events:
+            detail = await document("cuelists", event.id)
+            raw_meta = detail.get("songMeta")
+            meta = expect_mapping(raw_meta if raw_meta is not None else {}, "service.songMeta")
+            joined: list[tuple[str, str | None]] = []
+            raw_cues = detail.get("cues")
+            for raw_cue in expect_list(raw_cues if raw_cues is not None else [], "service.cues"):
+                cue = expect_mapping(raw_cue, "service.cues[]")
+                raw_foreground = cue.get("cue_foreground")
+                foreground = expect_mapping(raw_foreground if raw_foreground is not None else {}, "cue.foreground")
+                if foreground.get("type") != "text":
+                    continue
+                song_id = str(foreground.get("text") or "")
+                if song_id not in song_ids and song_id not in event.song_ids:
+                    continue
+                raw_cue_meta = meta.get(str(cue.get("cue_id") or ""))
+                cue_meta = expect_mapping(raw_cue_meta if raw_cue_meta is not None else {}, "cue.songMeta")
+                joined.append((song_id, _optional_key(cue_meta.get("key"))))
+            if not joined:
+                joined = [(song_id, None) for song_id in event.song_ids]
+            occurrences.append((event, joined))
+
+        required_ids = {song_id for _, joined in occurrences for song_id, _ in joined}
+        defaults: dict[str, str | None] = {}
+        for song_id in sorted(required_ids):
+            detail = await document("songs", song_id)
+            defaults[song_id] = _optional_key(detail.get("defaultKey"))
+        enriched_songs = tuple(
+            replace(song, key=defaults.get(song.id) or song.key) for song in songs
+        )
+        # Do not collapse ambiguous catalog IDs; the planner still diagnoses them.
+        catalog = {song.id: song for song in enriched_songs}
+        enriched_events = tuple(
+            replace(
+                event,
+                song_ids=tuple(song_id for song_id, _ in joined),
+                song_keys=tuple(
+                    key or (catalog[song_id].key if song_id in catalog else None)
+                    for song_id, key in joined
+                ),
+            )
+            for event, joined in occurrences
+        )
+        return enriched_events, enriched_songs
+
+    async def _firebase_login(self) -> None:
+        if self._firebase_token:
+            return
+        config = await self._api_request("config/firebase")
+        custom = await self._api_request("firebase/token")
+        for field in ("apiKey", "projectId"):
+            if not isinstance(config.get(field), str) or not config[field]:
+                raise SchemaDriftError("WorshipTools Firebase configuration is incomplete")
+        if not isinstance(custom.get("token"), str) or not custom["token"]:
+            raise SchemaDriftError("WorshipTools Firebase token is missing")
+        identity = expect_mapping(await request_json(
+            self._client, "POST",
+            "https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken",
+            params={"key": config["apiKey"]},
+            json={"token": custom["token"], "returnSecureToken": True},
+            endpoint_label="firebase/signInWithCustomToken",
+            policy=self._policy, sleep=self._sleep,
+        ), "firebase.identity")
+        if not isinstance(identity.get("idToken"), str) or not identity["idToken"]:
+            raise AuthenticationError("Firebase returned no identity token")
+        self._firebase_config = config
+        self._firebase_token = identity["idToken"]
+
+    async def _firestore_document(self, collection: str, identifier: str) -> Mapping[str, Any]:
+        for attempt in range(2):
+            await self._firebase_login()
+            assert self._firebase_config is not None
+            project = _path_segment(self._firebase_config["projectId"])
+            url = (
+                f"https://firestore.googleapis.com/v1/projects/{project}/databases/(default)/documents/"
+                f"accounts/{_path_segment(self._account_id)}/{collection}/{_path_segment(identifier)}"
+            )
+            try:
+                result = await request_json(
+                    self._client, "GET", url,
+                    headers={"Authorization": f"Bearer {self._firebase_token}"},
+                    endpoint_label=f"firestore/{collection}/[redacted]",
+                    policy=self._policy, sleep=self._sleep,
+                )
+            except NotFoundError:
+                return {}
+            except AuthenticationError:
+                if attempt:
+                    raise
+                self._firebase_token = None
+                continue
+            root = expect_mapping(result, "firestore.document")
+            if "fields" not in root and not isinstance(root.get("name"), str):
+                raise SchemaDriftError("Firestore response is not a document")
+            return _decode_firestore({"mapValue": {"fields": root.get("fields", {})}})
+        raise AssertionError("unreachable")
 
     async def _ensure_login(self, *, force: bool = False) -> None:
         if self._token and not force:
@@ -179,8 +304,14 @@ class WorshipToolsClient:
         raise AuthenticationError("WorshipTools login exceeded redirect limit")
 
     async def _get_page(self, endpoint: str, params: Mapping[str, Any]) -> Mapping[str, Any]:
+        return await self._api_request(f"account/{self._account_id}/{endpoint}", params,
+                                       label=f"/v1/account/[redacted]/{endpoint}")
+
+    async def _api_request(
+        self, path: str, params: Mapping[str, Any] | None = None, *, label: str | None = None
+    ) -> Mapping[str, Any]:
         await self._ensure_login()
-        url = f"{_API_ORIGIN}/v1/account/{self._account_id}/{endpoint}"
+        url = f"{_API_ORIGIN}/v1/{path}"
         headers = {
             "Authorization": f"Bearer {self._token}",
             "Content-Type": "application/json",
@@ -193,7 +324,7 @@ class WorshipToolsClient:
                 url,
                 headers=headers,
                 params=params,
-                endpoint_label=f"/v1/account/[redacted]/{endpoint}",
+                endpoint_label=label or f"/v1/{path}",
                 policy=self._policy,
                 sleep=self._sleep,
             )
@@ -208,12 +339,12 @@ class WorshipToolsClient:
                 url,
                 headers=headers,
                 params=params,
-                endpoint_label=f"/v1/account/[redacted]/{endpoint}",
+                endpoint_label=label or f"/v1/{path}",
                 policy=self._policy,
                 sleep=self._sleep,
             )
         root = expect_mapping(payload, "root")
-        return expect_mapping(root.get("response"), "response")
+        return expect_mapping(root.get("response", root), "response")
 
     async def _get_all(self, endpoint: str, params: Mapping[str, Any]) -> list[Mapping[str, Any]]:
         result: list[Mapping[str, Any]] = []
@@ -283,6 +414,38 @@ class WorshipToolsClient:
         return result
 
 
+def _path_segment(value: str) -> str:
+    if not value or value in {".", ".."}:
+        raise SchemaDriftError("WorshipTools document identifier is invalid")
+    return quote(value, safe="")
+
+
+def _optional_key(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise SchemaDriftError("WorshipTools musical key is not text")
+    return value.strip() or None
+
+
+def _decode_firestore(value: Any, depth: int = 0) -> Any:
+    if depth > 32:
+        raise SchemaDriftError("Firestore document nesting exceeded safety limit")
+    item = expect_mapping(value, "firestore.value")
+    if "mapValue" in item:
+        fields = expect_mapping(expect_mapping(item["mapValue"], "mapValue").get("fields", {}), "fields")
+        return {key: _decode_firestore(child, depth + 1) for key, child in fields.items()}
+    if "arrayValue" in item:
+        values = expect_list(expect_mapping(item["arrayValue"], "arrayValue").get("values", []), "values")
+        return [_decode_firestore(child, depth + 1) for child in values]
+    for key in ("stringValue", "booleanValue", "integerValue", "doubleValue", "timestampValue", "referenceValue", "bytesValue", "geoPointValue"):
+        if key in item:
+            return item[key]
+    if "nullValue" in item:
+        return None
+    raise SchemaDriftError("Firestore value has an unknown type")
+
+
 def _parse_event(value: Any, zone: ZoneInfo) -> SourceEvent:
     item = expect_mapping(value, "service")
     event_id = item.get("id", item.get("_id"))
@@ -333,6 +496,7 @@ def _parse_song(value: Any) -> SourceSong:
         name=item["name"],
         artist=str(item.get("artist") or item.get("author") or ""),
         ccli=str(item["ccli"]) if item.get("ccli") not in (None, "") else None,
+        key=_optional_key(item.get("key")),
     )
 
 

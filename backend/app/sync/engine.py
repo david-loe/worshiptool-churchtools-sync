@@ -15,6 +15,7 @@ from typing import Any, Mapping, Sequence
 from .errors import ConcurrentModificationError, NotFoundError, SyncError
 from .fingerprints import source_event_fingerprint, sync_config_fingerprint
 from .matching import normalize_ccli, normalize_text
+from .keys import key_matches, select_arrangement
 from .models import (
     ActionExecution,
     ActionKind,
@@ -118,6 +119,7 @@ class SyncOrchestrator:
                 source_events = await source.list_events(now, end)
                 target_events = await target.list_events(now, end)
                 source_songs = await source.list_songs()
+                source_events, source_songs = await source.enrich_snapshot(source_events, source_songs)
                 target_songs = await target.list_songs()
 
                 # Fetch only agendas that can possibly be selected.  The planner
@@ -641,8 +643,11 @@ class SyncOrchestrator:
         payload = action.payload
         if action.kind is ActionKind.CREATE_SONG:
             song = await target.create_song(payload, action.id)
-            arrangement = next((item for item in song.arrangements if item.is_default), None)
-            arrangement = arrangement or (song.arrangements[0] if song.arrangements else None)
+            arrangement = select_arrangement(
+                tuple(item for item in song.arrangements if normalize_text(item.name) == normalize_text(str(payload["arrangement_name"])))
+                if payload.get("key") else song.arrangements,
+                payload.get("key"),
+            )
             if arrangement is None:
                 raise ConcurrentModificationError("Atomically created song has no arrangement", song_id=song.id)
             return {
@@ -653,7 +658,7 @@ class SyncOrchestrator:
             }
         if action.kind is ActionKind.CREATE_ARRANGEMENT:
             song_id = _resolve(payload, resources, "target_song_id", "target_song_key")
-            arrangement = await target.create_arrangement(song_id, str(payload["name"]), action.id)
+            arrangement = await target.create_arrangement(song_id, str(payload["name"]), action.id, key=payload.get("key"))
             return {
                 "song_id": song_id,
                 "arrangement_id": arrangement.id,
@@ -663,6 +668,12 @@ class SyncOrchestrator:
             return {"agenda_item_id": payload.get("agenda_item_id"), "noop": True}
 
         event_id = str(payload["target_event_id"])
+        if action.kind in {ActionKind.INSERT_ITEM, ActionKind.REPLACE_ITEM} and payload.get("key") is not None:
+            song_id = _resolve(payload, resources, "target_song_id", "target_song_key")
+            arrangement_id = _resolve(payload, resources, "arrangement_id", "arrangement_key")
+            song = await target.get_song(song_id)
+            if not any(item.id == arrangement_id and key_matches(item.key, payload["key"]) for item in song.arrangements):
+                raise ConcurrentModificationError("Planned arrangement key changed", song_id=song_id)
         if action.kind is ActionKind.INSERT_ITEM:
             arrangement_id = _resolve(payload, resources, "arrangement_id", "arrangement_key")
             before_id = _optional_resolve(payload, resources, "before_item_id", "before_item_key")
@@ -708,14 +719,18 @@ class SyncOrchestrator:
             expected_ccli = normalize_ccli(payload.get("ccli"))
             if expected_ccli and normalize_ccli(song.ccli) != expected_ccli:
                 raise ConcurrentModificationError("Created song CCLI verification failed", song_id=song.id)
-            if not any(item.id == str(result["arrangement_id"]) for item in song.arrangements):
+            if not any(
+                item.id == str(result["arrangement_id"]) and key_matches(item.key, payload.get("key"))
+                for item in song.arrangements
+            ):
                 raise ConcurrentModificationError("Created song arrangement verification failed", song_id=song.id)
             return verified
         if action.kind is ActionKind.CREATE_ARRANGEMENT:
             song = await target.get_song(str(result["song_id"]))
             if not any(
                 arrangement.id == str(result["arrangement_id"])
-                and normalize_text(arrangement.name) == normalize_text(str(payload["name"]))
+                and key_matches(arrangement.key, payload.get("key"))
+                and (payload.get("key") is not None or normalize_text(arrangement.name) == normalize_text(str(payload["name"])))
                 for arrangement in song.arrangements
             ):
                 raise ConcurrentModificationError("Created arrangement verification failed", song_id=song.id)
@@ -740,6 +755,7 @@ class SyncOrchestrator:
                 or item.type != "song"
                 or item.song_id != expected_song_id
                 or item.arrangement_id != expected_arrangement_id
+                or not key_matches(item.key, payload.get("key"))
             ):
                 raise ConcurrentModificationError("Agenda song verification failed", item_id=item_id)
             verified["target_song_id"] = expected_song_id
@@ -1026,6 +1042,7 @@ def _reconcile_agenda_effect(
         or candidate.type != "song"
         or candidate.song_id != expected_song_id
         or candidate.arrangement_id != expected_arrangement_id
+        or not key_matches(candidate.key, payload.get("key"))
     ):
         return None
     result: dict[str, Any] = {

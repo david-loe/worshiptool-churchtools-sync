@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import AbstractSet, Any, Mapping, Sequence
 
-from .matching import EventMatch, SongIndex, match_events, normalize_text
+from .matching import EventMatch, SongIndex, match_events, normalize_ccli, normalize_text
+from .keys import arrangement_name, normalize_key, select_arrangement, effective_song_key
 from .models import (
     ActionKind,
     Agenda,
@@ -36,6 +37,7 @@ class _SongResource:
     song_key: str | None
     arrangement_id: str | None
     arrangement_key: str | None
+    key: str | None = None
 
     @property
     def dependencies(self) -> tuple[str, ...]:
@@ -48,6 +50,8 @@ class _SongResource:
             "target_song_key": self.song_key,
             "arrangement_id": self.arrangement_id,
             "arrangement_key": self.arrangement_key,
+            "key": self.key,
+            "song_name": self.source.name,
         }
 
 
@@ -97,6 +101,7 @@ class SyncPlanner:
         unchanged_event_keys: AbstractSet[tuple[str, str]] = frozenset(),
     ) -> SyncPlan:
         event_fingerprints = event_fingerprints or {}
+        source_events = _validate_source_keys(source_events, source_songs)
         matches = match_events(profile, tuple(source_events), tuple(target_events))
         matches = tuple(
             EventMatch(
@@ -112,6 +117,7 @@ class SyncPlanner:
                 ),
             )
             if match.target is not None
+            and not match.source.issues
             and (match.source.id, match.target.id) in unchanged_event_keys
             else match
             for match in matches
@@ -143,11 +149,14 @@ class SyncPlanner:
             for action in event.actions
             for dependency in action.dependencies
         }
-        preparation = [
-            action
-            for action in preparation
-            if needed_resources.intersection(_produced_resource_keys(action))
-        ]
+        # Include the entire dependency closure (an arrangement can depend on
+        # a song whose inline arrangement is not used by any viable event).
+        retained: list[PlannedAction] = []
+        for action in reversed(preparation):
+            if needed_resources.intersection(_produced_resource_keys(action)):
+                retained.append(action)
+                needed_resources.update(action.dependencies)
+        preparation = list(reversed(retained))
         return SyncPlan(
             run_id=run_id,
             profile_id=profile.id,
@@ -164,36 +173,31 @@ class SyncPlanner:
         source_songs: Sequence[SourceSong],
         target_songs: Sequence[TargetSong],
         factory: _ActionFactory,
-    ) -> tuple[dict[str, _SongResource], dict[str, PlanIssue], list[PlannedAction]]:
+    ) -> tuple[dict[tuple[str, str | None], _SongResource], dict[str, PlanIssue], list[PlannedAction]]:
         source_candidates: dict[str, list[SourceSong]] = {}
         for song in source_songs:
             source_candidates.setdefault(song.id, []).append(song)
+        required: dict[str, set[str | None]] = {}
+        for match in matches:
+            if match.status is not EventPlanStatus.READY or match.source.issues:
+                continue
+            for index, song_id in enumerate(match.source.song_ids):
+                candidates = source_candidates.get(song_id, ())
+                key = effective_song_key(match.source, index, candidates[0]) if candidates else None
+                required.setdefault(song_id, set()).add(key)
 
-        required_ids = sorted(
-            {
-                song_id
-                for match in matches
-                if match.status is EventPlanStatus.READY
-                for song_id in match.source.song_ids
-            }
-        )
-        resources: dict[str, _SongResource] = {}
+        resources: dict[tuple[str, str | None], _SongResource] = {}
         issues: dict[str, PlanIssue] = {}
         actions: list[PlannedAction] = []
         target_index = SongIndex(tuple(target_songs))
-        for source_id in required_ids:
+        groups: dict[str, list[tuple[SourceSong, TargetSong | None]]] = {}
+        for source_id in sorted(required):
             candidates = source_candidates.get(source_id, [])
-            if not candidates:
+            if len(candidates) != 1:
                 issues[source_id] = PlanIssue(
-                    "source_song_missing",
+                    "source_song_ambiguous" if candidates else "source_song_missing",
+                    "Die WorshipTools-Song-ID ist im Katalog nicht eindeutig" if candidates else
                     "Ein im Service verwendeter WorshipTools-Song fehlt im Songkatalog",
-                    details={"source_song_id": source_id},
-                )
-                continue
-            if len(candidates) > 1:
-                issues[source_id] = PlanIssue(
-                    "source_song_ambiguous",
-                    "Die WorshipTools-Song-ID ist im Katalog nicht eindeutig",
                     details={"source_song_id": source_id},
                 )
                 continue
@@ -201,74 +205,63 @@ class SyncPlanner:
             matched = target_index.match(source)
             if matched.ambiguous:
                 issues[source_id] = PlanIssue(
-                    "target_song_ambiguous",
-                    "Der WorshipTools-Song passt auf mehrere ChurchTools-Songs",
+                    "target_song_ambiguous", "Der WorshipTools-Song passt auf mehrere ChurchTools-Songs",
                     details={"source_song_id": source_id, "strategy": matched.strategy},
                 )
                 continue
-            if matched.target:
-                arrangement = _select_arrangement(matched.target)
-                if arrangement:
-                    resources[source_id] = _SongResource(
-                        source, matched.target.id, None, arrangement.id, None
-                    )
-                    continue
-                arrangement_key = f"arrangement:{source_id}"
-                actions.append(
-                    factory.make(
-                        ActionKind.CREATE_ARRANGEMENT,
-                        source_id,
-                        {
-                            "source_song_id": source_id,
-                            "target_song_id": matched.target.id,
-                            "name": profile.arrangement_name,
-                            "resource_key": arrangement_key,
-                        },
-                    )
-                )
-                resources[source_id] = _SongResource(
-                    source, matched.target.id, None, None, arrangement_key
-                )
-                continue
-            if not profile.auto_create_songs:
+            if not matched.target and not profile.auto_create_songs:
                 issues[source_id] = PlanIssue(
                     "target_song_missing",
                     "Kein eindeutiger ChurchTools-Song gefunden; automatisches Anlegen ist deaktiviert",
                     details={"source_song_id": source_id},
                 )
                 continue
-
-            song_key = f"song:{source_id}"
-            arrangement_key = f"arrangement:{source_id}"
-            actions.append(
-                factory.make(
-                    ActionKind.CREATE_SONG,
-                    source_id,
-                    {
-                        "source_song_id": source_id,
-                        "name": source.name,
-                        "author": source.artist,
-                        "ccli": source.ccli,
-                        "category_id": profile.song_category_id,
-                        "song_resource_key": song_key,
-                        "arrangement_name": profile.arrangement_name,
-                        "arrangement_resource_key": arrangement_key,
-                    },
-                )
+            identity = (
+                f"target:{matched.target.id}" if matched.target else
+                f"ccli:{normalize_ccli(source.ccli)}" if normalize_ccli(source.ccli) else
+                stable_action_id("song", normalize_text(source.name), normalize_text(source.artist))
             )
-            resources[source_id] = _SongResource(source, None, song_key, None, arrangement_key)
+            groups.setdefault(identity, []).append((source, matched.target))
 
-        # A preparation write is allowed only when at least one otherwise
-        # plannable event depends on that song.  This guarantees that an event
-        # with one ambiguous song causes no incidental song creation at all.
-        viable_song_ids = {
-            song_id
-            for match in matches
-            if match.status is EventPlanStatus.READY
-            and not any(song_id in issues for song_id in match.source.song_ids)
-            for song_id in match.source.song_ids
-        }
-        actions = [action for action in actions if action.payload.get("source_song_id") in viable_song_ids]
+        for group in groups.values():
+            source, target = group[0]
+            keys = {key for candidate, _ in group for key in required[candidate.id]}
+            song_id = target.id if target else None
+            song_resource = None if target else f"song:{source.id}"
+            seed_key = None
+            seed_resource = None
+            if target is None:
+                seed_key = next((key for candidate, _ in group if (key := normalize_key(candidate.key))), None)
+                seed_key = seed_key or next(iter(sorted(key for key in keys if key)), None)
+                seed_resource = f"arrangement:{source.id}" + (f":{seed_key}" if seed_key else "")
+                actions.append(factory.make(ActionKind.CREATE_SONG, source.id, {
+                    "source_song_id": source.id,
+                    "name": source.name, "author": source.artist, "ccli": source.ccli,
+                    "category_id": profile.song_category_id,
+                    "song_resource_key": song_resource,
+                    "arrangement_name": arrangement_name(profile.arrangement_name, seed_key),
+                    "arrangement_resource_key": seed_resource,
+                    "key": seed_key,
+                }))
+            for key in sorted(keys, key=lambda value: value or ""):
+                if target is None and (key is None or key == seed_key):
+                    resource = _SongResource(source, None, song_resource, None, seed_resource, key)
+                else:
+                    arrangement = select_arrangement(target.arrangements, key) if target else None
+                    if arrangement:
+                        resource = _SongResource(source, song_id, None, arrangement.id, None, key)
+                    else:
+                        arrangement_resource = f"arrangement:{source.id}" + (f":{key}" if key else "")
+                        actions.append(factory.make(ActionKind.CREATE_ARRANGEMENT, arrangement_resource, {
+                            "source_song_id": source.id,
+                            "target_song_id": song_id, "target_song_key": song_resource,
+                            "name": arrangement_name(profile.arrangement_name, key),
+                            "key": key, "resource_key": arrangement_resource,
+                        }, dependencies=(song_resource,) if song_resource else ()))
+                        resource = _SongResource(source, song_id, song_resource, None, arrangement_resource, key)
+                for candidate, _ in group:
+                    if key in required[candidate.id]:
+                        resources[(candidate.id, key)] = replace(resource, source=candidate)
         return resources, issues, actions
 
     def _plan_event(
@@ -276,7 +269,7 @@ class SyncPlanner:
         run_id: str,
         profile: ProfileConfig,
         match: EventMatch,
-        resources: Mapping[str, _SongResource],
+        resources: Mapping[tuple[str, str | None], _SongResource],
         song_issues: Mapping[str, PlanIssue],
         agendas: Mapping[str, Agenda],
         ownerships: Mapping[str, Sequence[Ownership]],
@@ -314,7 +307,7 @@ class SyncPlanner:
                 config_fingerprint=config_fingerprint,
                 issues=match.issues,
             )
-        event_issues = tuple(
+        event_issues = match.source.issues + tuple(
             song_issues[song_id] for song_id in dict.fromkeys(match.source.song_ids) if song_id in song_issues
         )
         if event_issues:
@@ -390,7 +383,7 @@ class SyncPlanner:
         target_event_id: str,
         agenda: Agenda,
         ownerships: tuple[Ownership, ...],
-        resources: Mapping[str, _SongResource],
+        resources: Mapping[tuple[str, str | None], _SongResource],
         event_plan_id: str,
         factory: _ActionFactory,
     ) -> tuple[list[PlannedAction], list[PlanIssue]]:
@@ -474,7 +467,9 @@ class SyncPlanner:
             last_item_key: str | None = None
             for selection_index, source_index in enumerate(indexes):
                 song_id = source_event.song_ids[source_index]
-                resource = resources[song_id]
+                # The effective key belongs to this occurrence, not to the song ID.
+                key = normalize_key(source_event.song_keys[source_index]) if source_event.song_keys else None
+                resource = resources[(song_id, key)]
                 source_key = f"{placement.id}:{source_index}:{song_id}"
                 desired_keys.add(source_key)
                 current = items[cursor] if cursor < len(items) else None
@@ -632,12 +627,22 @@ class SyncPlanner:
         return actions, issues
 
 
-def _select_arrangement(song: TargetSong):
-    if not song.arrangements:
-        return None
-    return next((arrangement for arrangement in song.arrangements if arrangement.is_default), None) or sorted(
-        song.arrangements, key=lambda arrangement: arrangement.id
-    )[0]
+def _validate_source_keys(
+    events: Sequence[SourceEvent], songs: Sequence[SourceSong]
+) -> tuple[SourceEvent, ...]:
+    catalog = {song.id: song for song in songs}
+    result = []
+    for event in events:
+        keys = event.song_keys or tuple(catalog[song_id].key if song_id in catalog else None for song_id in event.song_ids)
+        issues = list(event.issues)
+        for index, key in enumerate(keys):
+            if key and normalize_key(key) is None:
+                issues.append(PlanIssue(
+                    "invalid_song_key", "Die WorshipTools-Tonart ist ungültig",
+                    details={"source_song_id": event.song_ids[index], "song_index": index, "key": key},
+                ))
+        result.append(replace(event, song_keys=keys, issues=tuple(issues)))
+    return tuple(result)
 
 
 def _anchor_matches(anchor: AgendaAnchor, item: AgendaItem) -> bool:

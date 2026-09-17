@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import { ApiError } from '@/api/client'
-import { eventDateLabel, groupRunEvents, newSongShareText, recoverableRunId, runEventFromQuery, runIdFromLocation } from './run'
+import { actionDescription, eventDateLabel, groupRunEvents, newSongShareText, recoverableRunId, runEventFromQuery, runIdFromLocation } from './run'
+
+describe('Tonarten in Vorschau und Aktionsdetails', () => {
+  it('zeigt den Songnamen und die geplante Tonart', () => {
+    expect(actionDescription({ kind: 'insert_item', payload: { song_name: 'Lied', key: 'F#m' } })).toBe('Lied · Tonart F#m')
+  })
+
+  it('unterstützt ältere Aktionen ohne Tonart', () => {
+    expect(actionDescription({ kind: 'insert_item', payload: {} })).toBe('insert_item')
+    expect(actionDescription({ kind: 'insert_item', payload: { song_name: 'Lied', key: null } })).toBe('Lied')
+  })
+})
 
 describe('Run-Recovery', () => {
   it('akzeptiert nur Run-Ziele aus dem erwarteten Workspace', () => {

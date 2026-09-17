@@ -26,7 +26,7 @@ def run(coro):
     return asyncio.run(coro)
 
 
-def test_worshiptools_song_parser_deliberately_ignores_key_and_tempo() -> None:
+def test_worshiptools_song_parser_reads_key_and_ignores_tempo() -> None:
     base = {
         "id": "song-1",
         "name": "Amazing Grace",
@@ -34,9 +34,10 @@ def test_worshiptools_song_parser_deliberately_ignores_key_and_tempo() -> None:
         "ccli": "123",
     }
 
-    assert worshiptools_module._parse_song(base) == worshiptools_module._parse_song(
-        {**base, "key": "G", "tempo": 72, "bpm": 72}
-    )
+    with_key = worshiptools_module._parse_song({**base, "key": "G", "tempo": 72, "bpm": 72})
+    assert with_key.key == "G"
+    assert worshiptools_module._parse_song(base).key is None
+    assert with_key == worshiptools_module._parse_song({**base, "key": "G"})
 
 
 def test_churchtools_rejects_non_tenant_or_non_https_urls() -> None:

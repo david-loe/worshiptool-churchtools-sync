@@ -6,8 +6,8 @@ import LoadingState from '@/components/LoadingState.vue'
 import ErrorBanner from '@/components/ErrorBanner.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import { api, errorMessage } from '@/api/client'
-import type { RunEventResult, RunEventStatus, SyncAction, SyncActionPage, SyncRun, SyncRunResult } from '@/api/types'
-import { groupRunEvents, newSongShareText, runEventFromQuery } from '@/domain/run'
+import type { RunEventResult, RunEventStatus, SyncActionPage, SyncRun, SyncRunResult } from '@/api/types'
+import { actionDescription, groupRunEvents, newSongShareText, runEventFromQuery } from '@/domain/run'
 import { duration, formatDateTime } from '@/utils/format'
 import { useWorkspaceStore } from '@/stores/workspaces'
 import { useToastStore } from '@/stores/toasts'
@@ -68,11 +68,6 @@ function eventStart(event: RunEventResult): string | null {
 
 function eventDomId(eventId: string): string {
   return `event-result-${eventId.replace(/[^A-Za-z0-9_-]/g, '-')}`
-}
-
-function actionDescription(action: SyncAction): string {
-  const value = action.payload.description ?? action.payload.name ?? action.payload.song_name ?? action.kind
-  return String(value)
 }
 
 function errorDetail(value: Record<string, unknown> | null): string {

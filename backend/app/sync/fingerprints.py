@@ -7,32 +7,34 @@ import json
 from typing import Any, Mapping, Sequence
 
 from .matching import normalize_ccli, normalize_text
+from .keys import effective_song_key
 from .models import ProfileConfig, SourceEvent, SourceSong, to_primitive
 
 
 def source_event_fingerprint(
     event: SourceEvent, source_songs: Sequence[SourceSong]
 ) -> str:
-    """Hash ordered song identity and matching metadata; deliberately ignore key/tempo."""
+    """Hash ordered song identity, matching metadata and effective musical key."""
 
     candidates: dict[str, list[SourceSong]] = {}
     for song in source_songs:
         candidates.setdefault(song.id, []).append(song)
     ordered_songs = []
-    for song_id in event.song_ids:
+    for index, song_id in enumerate(event.song_ids):
         metadata = sorted(
             (
                 {
                     "name": normalize_text(song.name),
                     "artist": normalize_text(song.artist),
                     "ccli": normalize_ccli(song.ccli),
+                    "key": effective_song_key(event, index, song),
                 }
                 for song in candidates.get(song_id, ())
             ),
             key=_canonical_json,
         )
         ordered_songs.append({"id": song_id, "metadata": metadata})
-    return _sha256({"songs": ordered_songs})
+    return _sha256({"songs": ordered_songs, "key_sync_version": 1})
 
 
 def sync_config_fingerprint(

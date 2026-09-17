@@ -8,6 +8,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from .errors import ConcurrentModificationError, ConflictError, NotFoundError
 from .matching import match_song, normalize_text
+from .keys import select_arrangement
 from .models import (
     ActionExecution,
     ActionStatus,
@@ -39,6 +40,11 @@ class FakeSourceProvider(SourceProvider):
 
     async def list_songs(self) -> Sequence[SourceSong]:
         return self.songs
+
+    async def enrich_snapshot(
+        self, events: Sequence[SourceEvent], songs: Sequence[SourceSong]
+    ) -> tuple[Sequence[SourceEvent], Sequence[SourceSong]]:
+        return events, songs
 
 
 class FakeTargetProvider(TargetProvider):
@@ -84,20 +90,24 @@ class FakeTargetProvider(TargetProvider):
         if matched.target:
             return matched.target
         song_id = self._next_id("song")
-        arrangement = Arrangement(self._next_id("arrangement"), str(payload["arrangement_name"]), True)
+        arrangement = Arrangement(self._next_id("arrangement"), str(payload["arrangement_name"]), True, payload.get("key"))
         song = TargetSong(song_id, probe.name, probe.artist, probe.ccli, (arrangement,))
         self.songs[song.id] = song
         return song
 
-    async def create_arrangement(self, song_id: str, name: str, action_id: str) -> Arrangement:
+    async def create_arrangement(self, song_id: str, name: str, action_id: str, *, key: str | None = None) -> Arrangement:
         self._write("create_arrangement", "", action_id)
         song = await self.get_song(song_id)
-        existing = [item for item in song.arrangements if normalize_text(item.name) == normalize_text(name)]
+        if key is not None:
+            existing_key = select_arrangement(song.arrangements, key)
+            if existing_key:
+                return existing_key
+        existing = [item for item in song.arrangements if key is None and normalize_text(item.name) == normalize_text(name)]
         if len(existing) == 1:
             return existing[0]
         if len(existing) > 1:
             raise ConflictError("Fake arrangement is ambiguous")
-        arrangement = Arrangement(self._next_id("arrangement"), name, True)
+        arrangement = Arrangement(self._next_id("arrangement"), name, not song.arrangements, key)
         self.songs[song_id] = replace(song, arrangements=song.arrangements + (arrangement,))
         return arrangement
 
@@ -127,6 +137,7 @@ class FakeTargetProvider(TargetProvider):
             str(defaults.get("title") or ""),
             self._song_for_arrangement(arrangement_id),
             arrangement_id,
+            self._key_for_arrangement(arrangement_id),
         )
         items.insert(position, item)
         self._store_agenda(event_id, items)
@@ -148,6 +159,7 @@ class FakeTargetProvider(TargetProvider):
             items[index],
             song_id=self._song_for_arrangement(arrangement_id),
             arrangement_id=arrangement_id,
+            key=self._key_for_arrangement(arrangement_id),
         )
         self._store_agenda(event_id, items)
         return items[index]
@@ -169,6 +181,10 @@ class FakeTargetProvider(TargetProvider):
             if any(item.id == arrangement_id for item in song.arrangements):
                 return song.id
         raise NotFoundError("Fake arrangement not found", arrangement_id=arrangement_id)
+
+    def _key_for_arrangement(self, arrangement_id: str) -> str | None:
+        song = self.songs[self._song_for_arrangement(arrangement_id)]
+        return next(item.key for item in song.arrangements if item.id == arrangement_id)
 
     def _store_agenda(self, event_id: str, items: Sequence[AgendaItem]) -> None:
         self.agendas[event_id] = Agenda(
