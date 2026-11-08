@@ -140,6 +140,7 @@ export interface PlacementRules {
   anchor: AgendaAnchor
   relation: 'before' | 'at' | 'after'
   multiple_anchor_policy: 'fail' | 'first'
+  optional: boolean
   song_start: number
   song_end: number | null
 }

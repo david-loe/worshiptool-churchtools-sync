@@ -427,6 +427,10 @@ class PlacementConfig(APIRequest):
     anchor: AgendaAnchorConfig
     relation: Literal["before", "at", "after"] = "after"
     multiple_anchor_policy: Literal["fail", "first"] = "fail"
+    optional: bool = Field(
+        default=False,
+        description="Bei fehlendem Anker diesen Zielbereich überspringen.",
+    )
     song_start: int = Field(
         default=0,
         description="Inklusiver Song-Startindex; negative Werte zählen vom Ende.",

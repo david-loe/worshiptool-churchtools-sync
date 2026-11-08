@@ -93,6 +93,14 @@ def test_workspace_usage_accepts_supported_manual_run_cooldowns(cooldown):
     assert usage.manual_run_cooldown_seconds == cooldown
 
 
+def test_placement_optional_defaults_to_false_and_rejects_null():
+    document = {"id": "main", "anchor": {"title": "Lobpreis"}}
+    assert PlacementConfig.model_validate(document).optional is False
+    assert PlacementConfig.model_validate({**document, "optional": True}).optional is True
+    with pytest.raises(ValidationError):
+        PlacementConfig.model_validate({**document, "optional": None})
+
+
 def test_placement_config_accepts_python_style_negative_slice_boundaries():
     all_but_last = PlacementConfig.model_validate(
         {

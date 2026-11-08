@@ -174,6 +174,7 @@ class PlacementRule:
     song_start: int = 0
     song_end: int | None = None
     multiple_anchor_policy: MultipleAnchorPolicy = MultipleAnchorPolicy.FAIL
+    optional: bool = False
 
 
 @dataclass(frozen=True, slots=True)

@@ -84,7 +84,7 @@ function removeRule(index: number): void {
 }
 
 function addPlacement(): void {
-  form.value.placements.push({ id: `placement-${form.value.placements.length + 1}`, anchor: { item_type: 'header', title: '' }, relation: 'after', multiple_anchor_policy: 'fail', song_start: 0, song_end: null })
+  form.value.placements.push({ id: `placement-${form.value.placements.length + 1}`, anchor: { item_type: 'header', title: '' }, relation: 'after', multiple_anchor_policy: 'fail', optional: false, song_start: 0, song_end: null })
 }
 
 function removePlacement(index: number): void {
@@ -205,6 +205,7 @@ onMounted(load)
           <label><span>Eindeutige Placement-ID</span><input v-model="placement.id" required maxlength="100" pattern="[A-Za-z0-9][A-Za-z0-9_.:-]*" placeholder="main" /><small>Dient als eindeutiger interner Schlüssel dieses Zielbereichs innerhalb des Profils.</small></label>
           <label><span>Relation zum Anker</span><select v-model="placement.relation"><option value="before">Davor</option><option value="at">An dessen Position</option><option value="after">Danach</option></select><small>„Davor“ belegt die letzten zusammenhängenden Song-Slots unmittelbar vor dem Anker. Fehlende Slots werden davor ergänzt. „An dessen Position“ und „Danach“ beginnen beim beziehungsweise hinter dem Anker. Die Song-Reihenfolge bleibt erhalten.</small></label>
           <label><span>Bei mehreren Ankern</span><select v-model="placement.multiple_anchor_policy"><option value="fail">Ereignis mit Fehler beenden</option><option value="first">Ersten Treffer verwenden</option></select><small>„Erster Treffer“ verwendet die Agenda-Reihenfolge und speichert eine Warnung mit allen Treffern.</small></label>
+          <label class="check-card span-2"><input v-model="placement.optional" type="checkbox" /><span><strong>Zielbereich ist optional</strong><small>Fehlt der Anker, wird dieser Zielbereich übersprungen und der Sync fortgesetzt. Bereits synchronisierte Songs in diesem Bereich bleiben erhalten.</small></span></label>
           <label><span>Anker-Typ</span><input v-model="placement.anchor.item_type" placeholder="header" /><small>Optionaler ChurchTools-Agendatyp, zum Beispiel header, song oder text.</small></label><label><span>Anker-Titel</span><input v-model="placement.anchor.title" placeholder="Lobpreis" /><small>Optionaler vollständiger Titel; Groß-/Kleinschreibung und Satzzeichen werden vereinheitlicht.</small></label>
           <label><span>Anker-Item-ID (optional)</span><input v-model="placement.anchor.item_id" placeholder="Remote-ID" /><small>Mindestens Typ, Titel oder Item-ID ist nötig; die ID ist die präziseste Zuordnung.</small></label>
           <label><span>Erster Song (0-basiert)</span><input v-model.number="placement.song_start" type="number" step="1" required :aria-describedby="`song-selection-${index}`" /><small>Negative Werte zählen vom Ende; −1 beginnt beim letzten Song.</small></label>

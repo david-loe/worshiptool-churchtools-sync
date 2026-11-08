@@ -105,6 +105,15 @@ Weitere Dokumente:
 - [Architektur](docs/architecture.md)
 - [Sicherheitsmodell](docs/security.md)
 
+## Optionale Zielbereiche
+
+Im Profileditor kann jeder Zielbereich als „Zielbereich ist optional“ markiert
+werden (`optional: true` in der API). Fehlt sein Agenda-Anker, überspringt der
+Sync diesen Bereich und synchronisiert die übrigen Bereiche weiter. Im
+Sync-Protokoll erscheint ein Hinweis. Bereits synchronisierte Songs und ihre
+Verwaltungszuordnungen im übersprungenen Bereich bleiben erhalten. Standardmäßig
+sind Zielbereiche verpflichtend; andere Fehler werden weiterhin regulär behandelt.
+
 ## Entwicklung und Tests
 
 ```bash

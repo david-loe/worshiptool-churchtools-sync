@@ -295,6 +295,20 @@ def test_notification_work_due_tracks_fanout_due_retries_and_expired_claims(
     assert repository._notification_work_due(NOW)
 
 
+@pytest.mark.parametrize("optional", [False, True])
+def test_runtime_loads_optional_placement_from_stored_profile(database, db, settings, optional):
+    workspace, source, target = _seed_connections(db, settings)
+    profile = _profile(db, workspace, source, target, "Optional")
+    profile.placements = [{**profile.placements[0], "optional": optional}]
+    run = _run(db, profile, status=SyncRunStatus.QUEUED)
+    db.commit()
+
+    specification = asyncio.run(SqlRunRepository(database).claim(str(run.id), "worker", 300))
+
+    assert specification is not None
+    assert specification.profile.placements[0].optional is optional
+
+
 def test_sql_run_repository_claim_plan_recovery_and_owner_checked_finish(
     database, db, settings
 ) -> None:
@@ -308,6 +322,7 @@ def test_sql_run_repository_claim_plan_recovery_and_owner_checked_finish(
     assert specification is not None
     assert specification.workspace_id == str(workspace.id)
     assert specification.profile.placements[0].multiple_anchor_policy.value == "fail"
+    assert specification.profile.placements[0].optional is False
     assert asyncio.run(repository.claim(str(run.id), "worker-b", 300)) is None
 
     plan = SyncPlan(

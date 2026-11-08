@@ -116,6 +116,32 @@ describe('Profilmodell', () => {
       responsible: null,
       duration: null,
     })
+    expect(profile.placements[0]!.optional).toBe(false)
+  })
+
+  it.each([false, true])('bewahrt optionale Zielbereiche (%s) beim Laden und Speichern', (optional) => {
+    const persisted: SyncProfile = {
+      ...newProfile(),
+      id: 'profile-1',
+      workspace_id: 'workspace-1',
+      next_scheduled_at: null,
+      delete_blockers: [],
+      revision: 1,
+      created_at: '2026-08-23T00:00:00Z',
+      updated_at: '2026-08-23T00:00:00Z',
+    }
+    persisted.placements[0]!.optional = optional
+
+    const input = profileInputFromProfile(persisted)
+    expect(input.placements[0]!.optional).toBe(optional)
+    expect(sanitizeProfile(input).placements[0]!.optional).toBe(optional)
+  })
+
+  it('behandelt Zielbereiche ohne optionale Einstellung weiterhin als verpflichtend', () => {
+    const profile = newProfile()
+    Reflect.deleteProperty(profile.placements[0]!, 'optional')
+
+    expect(sanitizeProfile(profile).placements[0]!.optional).toBe(false)
   })
 
   it('übernimmt das gewählte Sync-Verhalten beim Bearbeiten eines Profils', () => {

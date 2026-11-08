@@ -1083,6 +1083,7 @@ def _profile_config(profile: SyncProfile, *, revision: int) -> ProfileConfig:
             multiple_anchor_policy=MultipleAnchorPolicy(
                 str(rule.get("multiple_anchor_policy") or "fail")
             ),
+            optional=rule.get("optional", False),
         )
         for rule in profile.placements or ()
     )

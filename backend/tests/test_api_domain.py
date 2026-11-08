@@ -57,6 +57,7 @@ from app.schemas import (
     InvitationAccept,
     InvitationCreate,
     ProfileCreate,
+    ProfileOut,
     ProfileUpdate,
     RegisterRequest,
     RunCreate,
@@ -375,6 +376,35 @@ def test_provider_credentials_have_bounded_values_and_preserve_password_whitespa
             None,
         )
     assert oversized.value.code == "invalid_connection_credentials"
+
+
+@pytest.mark.parametrize("optional", [False, True])
+def test_profile_persists_optional_placements_on_create_and_update(db, settings, optional):
+    user, workspace = _register(db, settings, "optional@example.org", "Optional")
+    access = _access(user, workspace)
+    source, target = _connections(db, settings, access)
+    placement = {"id": "main", "anchor": {"title": "Lobpreis"}, "optional": optional}
+    profile = create_profile(
+        ProfileCreate(
+            source_connection_id=source.id,
+            target_connection_id=target.id,
+            name="Optional",
+            song_category_id=4,
+            placements=[placement],
+        ), access, db, None,
+    )
+    db.refresh(profile)
+    assert profile.placements[0]["optional"] is optional
+    assert ProfileOut.model_validate(profile).placements[0].optional is optional
+
+    updated = update_profile(
+        profile.id,
+        ProfileUpdate(placements=[{**placement, "optional": not optional}]),
+        access, db, None,
+    )
+    db.refresh(updated)
+    assert updated.placements[0]["optional"] is not optional
+    assert ProfileOut.model_validate(updated).placements[0].optional is not optional
 
 
 def test_profile_updates_increment_revision_without_conditional_header(db, settings):
@@ -874,6 +904,7 @@ def test_openapi_exposes_versioned_contract_without_secret_response_fields(setti
     assert "credentials_encrypted" not in connection_schema["properties"]
     profile_schema = document["components"]["schemas"]["ProfileCreate"]
     placement_schema = document["components"]["schemas"]["PlacementConfig"]
+    assert placement_schema["properties"]["optional"]["default"] is False
     assert profile_schema["properties"]["placements"]["items"]["$ref"].endswith(
         "/PlacementConfig"
     )

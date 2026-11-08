@@ -49,11 +49,11 @@ async function mockAuthenticatedApi(page: Page): Promise<void> {
 
 test('Profil warnt bei möglicher Song-Mehrfachverwendung und bleibt speicherbar', async ({ page }) => {
   await mockAuthenticatedApi(page)
-  const overlappingProfile = {
+  let overlappingProfile = {
     ...profile,
     placements: [
       { id: 'worship', anchor: { item_type: 'header', title: 'Lobpreis' }, relation: 'after', multiple_anchor_policy: 'fail', song_start: 0, song_end: -1 },
-      { id: 'closing', anchor: { item_type: 'header', title: 'Abschluss' }, relation: 'after', multiple_anchor_policy: 'fail', song_start: -2, song_end: -1 },
+      { id: 'closing', anchor: { item_type: 'header', title: 'Abschluss' }, relation: 'after', multiple_anchor_policy: 'fail', optional: true, song_start: -2, song_end: -1 },
     ],
   }
   await page.route((url) => url.pathname === `/api/v1/workspaces/${workspace.id}/connections`, (route) => json(route, {
@@ -66,15 +66,19 @@ test('Profil warnt bei möglicher Song-Mehrfachverwendung und bleibt speicherbar
     data: { calendars: [], campuses: [], song_categories: [{ id: '4', name: 'Lieder' }] },
     retrieved_at: '2026-01-01T10:00:00Z',
   }))
-  await page.route(`**/api/v1/workspaces/${workspace.id}/profiles/${profile.id}`, (route) =>
-    json(route, route.request().method() === 'PATCH'
-      ? { ...overlappingProfile, ...route.request().postDataJSON() }
-      : overlappingProfile))
+  await page.route(`**/api/v1/workspaces/${workspace.id}/profiles/${profile.id}`, (route) => {
+    if (route.request().method() === 'PATCH') {
+      overlappingProfile = { ...overlappingProfile, ...route.request().postDataJSON() }
+    }
+    return json(route, overlappingProfile)
+  })
 
   await page.goto(`/profiles/${profile.id}`)
   const placementSection = page.locator('#placement')
   const warning = placementSection.getByRole('status')
   const second = placementSection.locator('.repeat-card').nth(1)
+  await expect(placementSection.getByRole('checkbox', { name: 'Zielbereich ist optional' }).first()).not.toBeChecked()
+  await expect(second.getByRole('checkbox', { name: 'Zielbereich ist optional' })).toBeChecked()
   await expect(warning).toContainText('Zielbereiche 1 und 2')
   await expect(warning).toContainText('Songs mehrfach im Ablauf')
   await expect(warning).toHaveAttribute('aria-live', 'polite')
@@ -88,6 +92,8 @@ test('Profil warnt bei möglicher Song-Mehrfachverwendung und bleibt speicherbar
   await expect(warning).toBeEmpty()
 
   await placementSection.getByRole('button', { name: 'Weiteren Zielbereich' }).click()
+  await expect(second.getByRole('checkbox', { name: 'Zielbereich ist optional' })).not.toBeChecked()
+  await second.getByRole('checkbox', { name: 'Zielbereich ist optional' }).check()
   await second.getByLabel('Anker-Titel').fill('Abschluss')
   await second.getByLabel('Erster Song (0-basiert)').fill('-2')
   await second.getByLabel('Ende exklusiv (optional)').fill('-1')
@@ -95,10 +101,12 @@ test('Profil warnt bei möglicher Song-Mehrfachverwendung und bleibt speicherbar
   const saved = page.waitForRequest((request) => request.method() === 'PATCH' && request.url().endsWith(`/profiles/${profile.id}`))
   await page.getByRole('button', { name: 'Profil speichern', exact: true }).click()
   expect((await saved).postDataJSON().placements).toMatchObject([
-    { song_start: 0, song_end: -1 },
-    { song_start: -2, song_end: -1 },
+    { song_start: 0, song_end: -1, optional: false },
+    { song_start: -2, song_end: -1, optional: true },
   ])
   await expect(page).toHaveURL('/profiles')
+  await page.goto(`/profiles/${profile.id}`)
+  await expect(second.getByRole('checkbox', { name: 'Zielbereich ist optional' })).toBeChecked()
 })
 
 test('öffentliche Anmeldung ist deutsch und zugänglich', async ({ page }) => {

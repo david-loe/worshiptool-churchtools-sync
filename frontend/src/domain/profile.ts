@@ -117,6 +117,7 @@ export function newProfile(): SyncProfileInput {
       anchor: { item_type: 'header', title: 'Lobpreis' },
       relation: 'after',
       multiple_anchor_policy: 'fail',
+      optional: false,
       song_start: 0,
       song_end: null,
     }],
@@ -208,6 +209,7 @@ function cloneProfileInput(input: SyncProfileInput): SyncProfileInput {
     })),
     placements: input.placements.map((placement) => ({
       ...placement,
+      optional: placement.optional ?? false,
       anchor: { ...placement.anchor },
     })),
     agenda_item_defaults: { ...input.agenda_item_defaults },

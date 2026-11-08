@@ -392,12 +392,24 @@ class SyncPlanner:
         issues: list[PlanIssue] = []
         reserved_item_ids: set[str] = set()
         desired_keys: set[str] = set()
+        skipped_placement_ids: set[str] = set()
         ownership_by_item = {ownership.agenda_item_id: ownership for ownership in ownerships}
 
         for placement in profile.placements:
             indexes = tuple(range(len(source_event.song_ids)))[placement.song_start : placement.song_end]
             anchors = [item for item in items if _anchor_matches(placement.anchor, item)]
             if not anchors:
+                if placement.optional:
+                    skipped_placement_ids.add(placement.id)
+                    issues.append(
+                        PlanIssue(
+                            "optional_anchor_not_found",
+                            "Der optionale Zielbereich wird übersprungen, da sein Agenda-Anker nicht gefunden wurde",
+                            severity=IssueSeverity.INFO,
+                            details={"placement_id": placement.id, "matches": []},
+                        )
+                    )
+                    continue
                 issues.append(
                     PlanIssue(
                         "anchor_not_found",
@@ -571,6 +583,7 @@ class SyncPlanner:
         for ownership in sorted(ownerships, key=lambda value: (value.placement_id, value.source_key, value.agenda_item_id)):
             if (
                 ownership.profile_id != profile.id
+                or ownership.placement_id in skipped_placement_ids
                 or ownership.source_key in desired_keys
                 or ownership.agenda_item_id in reserved_item_ids
             ):

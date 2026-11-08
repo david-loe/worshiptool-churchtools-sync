@@ -167,7 +167,8 @@ def test_plan_schema_two_contains_event_snapshots() -> None:
     assert plan.events[0].target_event_starts_at == dt("2026-01-01T10:00:00Z")
 
 
-def test_multiple_anchor_policy_fails_or_selects_first_deterministically() -> None:
+@pytest.mark.parametrize("optional", [False, True])
+def test_multiple_anchor_policy_fails_or_selects_first_deterministically(optional: bool) -> None:
     start = dt("2026-01-01T10:00:00Z")
 
     def make_plan(policy: MultipleAnchorPolicy):
@@ -178,6 +179,7 @@ def test_multiple_anchor_policy_fails_or_selects_first_deterministically() -> No
                     "main",
                     AgendaAnchor(item_type="header", title="Lobpreis"),
                     multiple_anchor_policy=policy,
+                    optional=optional,
                 ),
             ),
         )
@@ -233,6 +235,45 @@ def test_missing_anchor_has_distinct_error_code() -> None:
 
     assert plan.events[0].status is EventPlanStatus.FAILED
     assert plan.events[0].issues[0].code == "anchor_not_found"
+
+
+@pytest.mark.parametrize("optional_first", [False, True])
+def test_missing_optional_anchor_does_not_block_other_placements(optional_first: bool) -> None:
+    missing = PlacementRule("missing", AgendaAnchor(title="Existiert nicht"), optional=True)
+    required = PlacementRule("worship", AgendaAnchor(title="Lobpreis"))
+    plan = _plan_split_placements(
+        1, (missing, required) if optional_first else (required, missing)
+    )
+
+    event = plan.events[0]
+    assert event.status is EventPlanStatus.READY
+    assert len(event.actions) == 1
+    assert event.actions[0].payload["placement_id"] == "worship"
+    assert len(event.issues) == 1
+    assert event.issues[0].code == "optional_anchor_not_found"
+    assert event.issues[0].severity is IssueSeverity.INFO
+    assert event.issues[0].details == {"placement_id": "missing", "matches": []}
+
+
+def test_optional_placement_with_existing_anchor_syncs_normally() -> None:
+    required = PlacementRule("worship", AgendaAnchor(title="Lobpreis"))
+    normal = _plan_split_placements(2, (required,))
+    optional = _plan_split_placements(2, (replace(required, optional=True),))
+
+    assert optional.events == normal.events
+    assert optional.preparation_actions == normal.preparation_actions
+
+
+def test_optional_placement_changes_config_fingerprint() -> None:
+    configured = profile()
+    optional = replace(
+        configured, placements=(replace(configured.placements[0], optional=True),)
+    )
+    assert sync_config_fingerprint(
+        configured, source_connection_id="wt", target_connection_id="ct"
+    ) != sync_config_fingerprint(
+        optional, source_connection_id="wt", target_connection_id="ct"
+    )
 
 
 def target_song(song_id: str = "ct-song", ccli: str | None = "123") -> TargetSong:
@@ -813,6 +854,65 @@ def test_orchestrator_persists_plan_then_atomically_creates_and_verifies() -> No
     assert [kind for kind, _ in target.writes].count("create_song") == 1
     assert "create_arrangement" not in [kind for kind, _ in target.writes]
     assert all(execution.status.value == "verified" for execution in repository.executions.values())
+
+
+@pytest.mark.parametrize("active_placement", [False, True])
+def test_optional_missing_area_preserves_items_and_ownerships(active_placement: bool) -> None:
+    start = dt("2026-01-01T10:00:00Z")
+    configured = replace(
+        profile(),
+        placements=(PlacementRule("missing", AgendaAnchor(title="Abschluss"), optional=True),)
+        + (profile().placements if active_placement else ()),
+    )
+    repository = MemoryRunRepository(
+        RunSpecification("run", "workspace", "wt", "ct", configured)
+    )
+    owned_items = (
+        AgendaItem("owned-song", 2, "song", song_id="old", arrangement_id="old-arr"),
+        AgendaItem("changed-song", 3, "song", song_id="changed", arrangement_id="changed-arr"),
+    )
+    ownerships = tuple(
+        Ownership(
+            configured.id, "event", item_id, f"missing:{index}:old", "missing",
+            {"target_song_id": "old", "arrangement_id": "old-arr"},
+        )
+        for index, item_id in enumerate(("owned-song", "changed-song", "removed-song"))
+    )
+    repository.ownership_rows = list(ownerships)
+    source = FakeSourceProvider(
+        (SourceEvent("service", "Service", (start,), ("new",)),),
+        (SourceSong("new", "New Song", "Artist", "777"),),
+    )
+    target = FakeTargetProvider(
+        (TargetEvent("event", "Event", start),), (),
+        {"event": Agenda("event", (
+            AgendaItem("header", 0, "header", "Lobpreis"),
+            AgendaItem("boundary", 1, "text", "Predigt"),
+            *owned_items,
+        ))},
+    )
+    orchestrator = SyncOrchestrator(
+        repository, StaticProviderRegistry(source, target),
+        clock=type("Clock", (), {"now": lambda self: start})(),
+    )
+
+    assert asyncio.run(orchestrator.execute("run")) is RunStatus.SUCCEEDED
+    event = repository.plan.events[0]
+    assert [issue.code for issue in event.issues] == ["optional_anchor_not_found"]
+    assert all(action.payload["placement_id"] == "main" for action in event.actions)
+    assert all(ownership in repository.ownership_rows for ownership in ownerships)
+    actual_items = {item.id: item for item in target.agendas["event"].items}
+    for item in owned_items:
+        actual = actual_items[item.id]
+        assert (actual.type, actual.song_id, actual.arrangement_id) == (
+            item.type, item.song_id, item.arrangement_id
+        )
+    if active_placement:
+        assert any(kind == "insert_item" for kind, _ in target.writes)
+    else:
+        assert target.writes == []
+        assert repository.plan.preparation_actions == ()
+        assert event.actions == ()
 
 
 def test_default_mode_skips_unchanged_worshiptools_event_after_first_sync() -> None:
